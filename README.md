@@ -52,10 +52,13 @@ prompts/                          앱에 그대로 투입되는 파일
   system_common.txt               공통 (조건·맥락 무관)
   system_safety.txt               안전 규칙 (항상 결합)
   system_context_a.txt            맥락 A 일상 대화
-  system_context_b.txt            맥락 B 고민 상담 (공감 L1)
-  system_context_b_L2.txt         맥락 B 대안 (공감 L2)
+  system_context_b_A.txt          맥락 B · 공감 약함
+  system_context_b_B.txt          맥락 B · 공감 중간  ★시작점
+  system_context_b_C.txt          맥락 B · 공감 강함
   prompts.yaml                    조합 규칙 · 버전 · 모델 파라미터
   build_prompts.py                조합 + SHA-256 출력
+  response_rules.py               응답이 규칙을 지켰는지 검사
+  test_cases.md                   세션 전 테스트 6개
 
 analysis/
   10-manipulation-check-plan.md   조작 점검 계획 (결과 절 4.1)
@@ -73,8 +76,12 @@ OPEN_QUESTIONS.md                 아직 정하지 못한 것 (🔴 교수님 / 
 ```bash
 # 시스템 프롬프트를 조합하고 해시를 확인한다
 python3 prompts/build_prompts.py
-python3 prompts/build_prompts.py --emit context_b      # 본문 출력
+python3 prompts/build_prompts.py --emit context_b_B    # 본문 출력
 python3 prompts/build_prompts.py --json                # 앱이 읽을 형태
+
+# 응답이 프롬프트 규칙을 지켰는지 검사한다
+python3 prompts/response_rules.py --context b --text "<모델 응답>"
+python3 prompts/response_rules.py --jsonl logs/*.jsonl   # 금지어 0건 확인
 
 # 조작 점검기를 합성 데이터로 돌려 본다 (실제 데이터 없이)
 python3 analysis/manipulation_check.py --demo          # 올바른 구현 → 통과
@@ -88,7 +95,7 @@ python3 analysis/manipulation_check.py logs/*.jsonl
 
 ---
 
-## 이 묶음에서 가장 중요한 세 가지
+## 이 묶음에서 가장 중요한 네 가지
 
 ### 1. 시스템 프롬프트가 지연 조건 3수준에서 완전히 동일해야 한다
 
@@ -103,7 +110,14 @@ python3 analysis/manipulation_check.py logs/*.jsonl
 참가자가 물어봤을 때 연구자가 할 답도 고정해 두었다
 (`materials/02 §6`).
 
-### 3. 배제 주제 안전 경로가 발동한 턴에는 지연을 적용하지 않는다
+### 3. 공감 표현은 목록을 닫아 두고, 파일럿에서 A/B/C 중 고른다
+
+강하면 언어 단서가 지연을 덮고, 약하면 정서적 관여가 안 일어난다.
+결정을 미루는 대신 **세 안을 미리 만들고 판정 절차를 고정했다.**
+B안으로 시작하고, 정서적 관여 문항으로 이동 여부를 정한다
+(`materials/04 §4`). 어느 안을 썼는지 논문에 명시한다.
+
+### 4. 배제 주제 안전 경로가 발동한 턴에는 지연을 적용하지 않는다
 
 자해를 언급한 참가자를 17초 동안 빈 화면 앞에 앉혀 두는 것은
 그 자체로 해롭다. 목표 지연을 무시하고 즉시 표시하고, 세션을 멈추고,

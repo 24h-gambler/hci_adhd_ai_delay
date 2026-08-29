@@ -26,10 +26,14 @@ JOINER = "\n\n"
 # (PyYAML 의존을 피하기 위해 여기서 한 번 더 선언한다.
 #  yaml을 고치면 이 표도 같이 고친다 — verify_matches_yaml()이 검사한다.)
 COMPOSITION: dict[str, list[str]] = {
-    "context_a": ["system_common.txt", "system_safety.txt", "system_context_a.txt"],
-    "context_b": ["system_common.txt", "system_safety.txt", "system_context_b.txt"],
-    "context_b_L2": ["system_common.txt", "system_safety.txt", "system_context_b_L2.txt"],
+    "context_a":   ["system_common.txt", "system_safety.txt", "system_context_a.txt"],
+    "context_b_A": ["system_common.txt", "system_safety.txt", "system_context_b_A.txt"],
+    "context_b_B": ["system_common.txt", "system_safety.txt", "system_context_b_B.txt"],
+    "context_b_C": ["system_common.txt", "system_safety.txt", "system_context_b_C.txt"],
 }
+
+# 실제 세션에서 쓰는 맥락 B 변형 (prompts.yaml: empathy_variant)
+ACTIVE_B_KEY = "context_b_B"
 
 
 def build(key: str) -> str:
@@ -54,6 +58,15 @@ def read_version() -> str:
     return m.group(1).strip() if m else "unknown"
 
 
+def read_active_b() -> str:
+    """prompts.yaml의 empathy_variant(A|B|C)를 조합 키로 바꾼다."""
+    yaml_path = HERE / "prompts.yaml"
+    if not yaml_path.exists():
+        return ACTIVE_B_KEY
+    m = re.search(r'^empathy_variant:\s*"?([ABC])"?', yaml_path.read_text(encoding="utf-8"), re.M)
+    return f"context_b_{m.group(1)}" if m else ACTIVE_B_KEY
+
+
 def verify_matches_yaml() -> list[str]:
     """prompts.yaml의 composition과 COMPOSITION 표가 어긋나면 경고를 낸다."""
     yaml_path = HERE / "prompts.yaml"
@@ -63,7 +76,7 @@ def verify_matches_yaml() -> list[str]:
     warnings = []
     for key, files in COMPOSITION.items():
         block = re.search(
-            rf"^\s{{2}}{re.escape(key)}:\s*\n((?:\s{{4}}-\s.*\n)+)", text, re.M
+            rf"^\s{{2}}{re.escape(key)}:[^\n]*\n((?:\s{{4}}-\s.*\n)+)", text, re.M
         )
         if not block:
             warnings.append(f"prompts.yaml에 composition.{key}가 없습니다")
@@ -109,8 +122,13 @@ def main() -> int:
         print(f"{key:<16}{len(text):>7}  {sha256(text)}")
 
     hashes = {k: sha256(v) for k, v in built.items()}
+    active_b = read_active_b()
     print()
-    if hashes["context_a"] == hashes["context_b"]:
+    print(f"활성 맥락 B 변형: {active_b}  (prompts.yaml: empathy_variant)")
+    if active_b not in hashes:
+        print(f"✗ prompts.yaml의 empathy_variant가 가리키는 {active_b}가 없습니다.")
+        return 1
+    if hashes["context_a"] == hashes[active_b]:
         print("✗ 맥락 A와 B의 프롬프트가 동일합니다 — 맥락 조작이 성립하지 않습니다.")
         return 1
     print("✓ 맥락 A / B 프롬프트가 서로 다릅니다.")

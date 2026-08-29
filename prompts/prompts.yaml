@@ -6,7 +6,7 @@
 #   - 맥락 A와 B의 sha256은 반드시 달라야 한다.
 #   - 수정하면 version을 올리고, 이전 버전 데이터와 섞지 않는다.
 
-version: "v0.1"
+version: "v0.2"
 status: draft          # draft | pilot | locked
 locked_at: null        # 본 실험 시작 시 ISO8601 기록
 
@@ -16,36 +16,43 @@ composition:
     - system_common.txt
     - system_safety.txt
     - system_context_a.txt
-  context_b:
+  context_b_A:                      # 공감 약함 (건조)
     - system_common.txt
     - system_safety.txt
-    - system_context_b.txt        # 공감 수준 L1 (기본)
-  # 파일럿에서 맥락 조작이 약하면 아래로 교체한다 (OPEN_QUESTIONS Q6)
-  context_b_L2:
+    - system_context_b_A.txt
+  context_b_B:                      # 공감 중간 ★파일럿 시작점
     - system_common.txt
     - system_safety.txt
-    - system_context_b_L2.txt
+    - system_context_b_B.txt
+  context_b_C:                      # 공감 강함
+    - system_common.txt
+    - system_safety.txt
+    - system_context_b_C.txt
 
-empathy_level: L1      # L1 | L2  — 본 실험 시작 전 확정
+# 실제로 쓰는 맥락 B 변형. 파일럿의 "정서적 관여 정도" 문항으로 판정한다.
+#   관여가 낮다  → C 쪽으로   /   "AI가 너무 다정하다" → A 쪽으로
+# 최종 선택은 논문 방법 절에 명시한다.
+empathy_variant: B     # A | B | C
 
 model:
   # ⚠️ 실제 모델 ID와 버전을 여기에 박아 넣고 세션 로그에 그대로 남긴다.
   id: "TBD"
-  temperature: 0.3
+  temperature: 0.6     # 지정 범위 0.5~0.7. 응답 유사도 점검 결과에 따라 조정
   top_p: 1.0
-  max_tokens: 500        # 안전망. 길이는 프롬프트 규칙 2(300자)가 잡는다.
-                         # 300으로 두면 한국어 300자가 문장 중간에서 잘린다.
+  max_tokens: 200      # ⚠️ 잘림 위험 — materials/04 §6. finish_reason을 반드시 로깅
   seed: 20260401       # 지원되는 모델이면 고정
-  stream: false        # ★ 반드시 false — materials/04 §6 참조
-
-delay_conditions:
-  # 프롬프트와 무관. 앱이 참조하는 값이며 여기 함께 두어 버전을 묶는다.
-  immediate: { min_ms: 1000,  max_ms:  2000 }
-  medium:    { min_ms: 8000,  max_ms:  9000 }
-  long:      { min_ms: 16000, max_ms: 20000 }
-  practice:  { fixed_ms: 800 }
+  stream: false        # ★ 반드시 false — materials/04 §6
 
 conversation:
   turns_per_conversation: 5
   conversations_per_block: 3
   blocks: 2
+  reset_history_between_conversations: true   # ★ 대화 6개는 각각 독립 — materials/04 §7
+
+delay_conditions:
+  # 프롬프트와 무관. 앱이 참조하는 값이며 여기 함께 두어 버전을 묶는다.
+  # ⚠️ 파일럿에서 LLM 생성 시간 분포를 측정한 뒤 확정 (OPEN_QUESTIONS Q12)
+  immediate: { min_ms: 1000,  max_ms:  2000 }
+  medium:    { min_ms: 8000,  max_ms:  9000 }
+  long:      { min_ms: 16000, max_ms: 20000 }
+  practice:  { fixed_ms: 800 }
