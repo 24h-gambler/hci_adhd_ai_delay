@@ -14,6 +14,7 @@
 """
 
 import pathlib
+import re
 import sys
 import unittest
 
@@ -84,6 +85,14 @@ SUBSTRING_TRAPS = [
 TRUE_POSITIVES = SELF_HARM + HARM_TO_OTHERS + CRIME + ACUTE_CRISIS
 TRUE_NEGATIVES = IDIOMATIC_JUK + ORDINARY_WORRY + SUBSTRING_TRAPS
 
+# CONTRACT §5 / materials/02 §3 — 배제 주제 4범주와 그 범주에 속하는 예시.
+CATEGORY_EXAMPLES = [
+    ('self_harm', SELF_HARM),
+    ('harm_others', HARM_TO_OTHERS),
+    ('crime_legal', CRIME),
+    ('acute_crisis', ACUTE_CRISIS),
+]
+
 
 class TestSafetyReply(unittest.TestCase):
 
@@ -101,9 +110,22 @@ class TestSafetyReply(unittest.TestCase):
         self.assertTrue(safety.SAFETY_REPLY.endswith('.'))
 
     def test_safety_reply_matches_prompt_file(self):
-        """앱이 내보내는 문장과 시스템 프롬프트가 한 글자도 달라선 안 된다."""
+        """앱이 내보내는 문장과 시스템 프롬프트가 한 글자도 달라선 안 된다.
+
+        ★ 부분 문자열 검사(assertIn)로는 부족하다. 프롬프트 쪽 문장 뒤에
+        한 마디만 붙어도 통과하는데, 그러면 안전 경로에서 앱이 내는 문장과
+        모델이 내는 문장이 갈린다. prompts/test_cases.md는 완전 일치를
+        요구하므로 그 순간 안전 턴이 규칙 위반으로 채점되고
+        (verify.sh 4단계), 안전 경보 턴의 응답이 두 종류로 섞인다.
+        그래서 프롬프트가 따옴표로 고정한 출력 문장 자체를 뽑아 대조한다.
+        """
         prompt_text = SAFETY_PROMPT.read_text(encoding='utf-8')
-        self.assertIn(safety.SAFETY_REPLY, prompt_text)
+        quoted = re.findall(r'^"(.+)"\s*$', prompt_text, re.M)
+        self.assertTrue(quoted,
+                        'system_safety.txt에 따옴표로 고정된 출력 문장이 없다')
+        self.assertIn(safety.SAFETY_REPLY, quoted,
+                      '프롬프트가 지시하는 문장과 SAFETY_REPLY가 정확히 같지 않다: %r'
+                      % (quoted,))
 
     def test_safety_reply_itself_is_not_excluded(self):
         """경보 문구가 다시 경보를 발동시키면 안 된다."""
@@ -177,7 +199,9 @@ class TestFalsePositives(unittest.TestCase):
         self.assertGreaterEqual(len(TRUE_NEGATIVES), 12)
 
     def test_empty_input_is_not_excluded(self):
-        for text in ['', ' ', '\n', '\t  \n']:
+        """None은 잘못된 요청 본문(text: null)에서 들어올 수 있다.
+        여기서 터지면 그 턴이 500으로 날아가 데이터 한 점이 사라진다."""
+        for text in ['', ' ', '\n', '\t  \n', None]:
             with self.subTest(text=repr(text)):
                 self.assertFalse(safety.is_excluded(text))
 
@@ -186,6 +210,47 @@ class TestFalsePositives(unittest.TestCase):
         for text in ['안녕하세요', '테스트입니다', 'ㅎㅇ', '오늘 날씨가 좋네요']:
             with self.subTest(text=text):
                 self.assertFalse(safety.is_excluded(text))
+
+
+class TestMatchCategory(unittest.TestCase):
+    """★ CONTRACT §5 — "로그에는 매칭 여부만 남긴다. 어떤 키워드에 걸렸는지는
+    남기지 않는다(참가자 보호)."
+
+    is_excluded만 검사하면 match_category가 매칭된 원문 조각을 함께
+    돌려주도록 바뀌어도 이 파일의 다른 검사는 전부 통과한다. 그러면 참가자의
+    위기 발화가 로그와 연구자 화면에 그대로 박힌다 — 되돌릴 수 없는 유출이다.
+    """
+
+    def test_categories_are_the_four_contract_categories(self):
+        """CONTRACT §5 — 자해·자살, 타인 가해, 범죄, 급성 위기."""
+        self.assertEqual(set(safety.PATTERNS),
+                         {'self_harm', 'harm_others', 'crime_legal', 'acute_crisis'})
+
+    def test_each_example_maps_to_its_own_category(self):
+        """범주가 뒤섞이면 연구자 화면의 경보 종류가 틀리고,
+        사후에 어떤 종류의 중단이었는지 복원할 수 없다."""
+        for expected, samples in CATEGORY_EXAMPLES:
+            for text in samples:
+                with self.subTest(expected=expected, text=text):
+                    self.assertEqual(safety.match_category(text), expected)
+
+    def test_category_never_leaks_the_matched_text(self):
+        """돌려준 값이 참가자 입력의 조각이면 그대로 로그에 남는다."""
+        for _, samples in CATEGORY_EXAMPLES:
+            for text in samples:
+                with self.subTest(text=text):
+                    cat = safety.match_category(text)
+                    self.assertIsInstance(cat, str)
+                    self.assertIn(cat, safety.PATTERNS,
+                                  'PATTERNS에 없는 값을 돌려줬다: %r' % (cat,))
+                    self.assertTrue(cat.isascii(),
+                                    '범주 이름에 참가자 입력이 섞였다: %r' % (cat,))
+                    self.assertNotIn(cat, text)
+
+    def test_returns_none_for_ordinary_input(self):
+        for text in TRUE_NEGATIVES:
+            with self.subTest(text=text):
+                self.assertIsNone(safety.match_category(text))
 
 
 class TestReturnType(unittest.TestCase):

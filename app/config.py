@@ -130,7 +130,13 @@ def _validate(cfg: dict) -> None:
 
 
 def scaled_delay_conditions(cfg: dict, scale: float) -> dict:
-    """E2E 고속 모드용. 세 조건과 연습 지연에 같은 배율을 적용한다."""
+    """E2E 고속 모드용. 세 조건과 연습 지연에 같은 배율을 적용한다.
+
+    ★ min_ms와 max_ms의 하한 clamp가 서로 달라서(1 / 2), 배율이 너무 작으면
+      조건들이 같은 구간으로 뭉개진다. 예를 들어 scale=1e-4면 즉시와 중간이
+      모두 1~2ms가 되고 긺은 폭이 0이 된다 — 조건 간 대비가 사라진 채로
+      축소 실행이 "통과"한다. 뭉개진 범위를 조용히 돌려주지 않고 터뜨린다.
+    """
     if scale == 1.0:
         return cfg["delay_conditions"]
     dc = {}
@@ -140,7 +146,27 @@ def scaled_delay_conditions(cfg: dict, scale: float) -> dict:
         else:
             dc[cond] = {"min_ms": max(1, round(rng["min_ms"] * scale)),
                         "max_ms": max(2, round(rng["max_ms"] * scale))}
+    _validate_scaled(dc, scale)
     return dc
+
+
+def _validate_scaled(dc: dict, scale: float) -> None:
+    """축소 후에도 조건 구조가 그대로 남아 있는지 확인한다."""
+    order = ["immediate", "medium", "long"]
+    for cond in order:
+        lo, hi = dc[cond]["min_ms"], dc[cond]["max_ms"]
+        if not 0 < lo < hi:
+            raise ValueError(
+                f"delay_scale={scale}에서 {cond} 범위가 무너집니다: {lo}~{hi} "
+                f"— 조건 내 분산이 사라집니다")
+    for a, b in zip(order, order[1:]):
+        if dc[a]["max_ms"] >= dc[b]["min_ms"]:
+            raise ValueError(
+                f"delay_scale={scale}에서 {a}와 {b}의 범위가 겹칩니다 "
+                f"— 조건 간 대비가 사라집니다")
+    if dc["practice"]["fixed_ms"] >= dc["immediate"]["min_ms"]:
+        raise ValueError(
+            f"delay_scale={scale}에서 연습 지연이 즉시 조건 범위 안으로 들어갑니다")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@
 이 파일이 기준이다. 구현이 여기와 어긋나면 구현이 틀린 것이다.
 """
 
+import hashlib
 import inspect
 import itertools
 import json
@@ -225,7 +226,7 @@ class TestCounterbalancing(unittest.TestCase):
         """CONTRACT §4의 배정식 그대로:
              블록 1 → PERMS[(N-1) % 6]
              블록 2 → PERMS[(N-1+3) % 6]
-        (CONTRACT §2의 예시 JSON은 이 식과 어긋난다. §4가 규범이다.)
+        (CONTRACT §2의 예시 JSON은 P01 = 이 식의 결과다. 어긋나면 §4가 규범이다.)
         """
         perms = as_lists(schedule.PERMS)
         for n in range(1, 25):
@@ -300,12 +301,20 @@ class TestDrawDelay(unittest.TestCase):
         base = [schedule.draw_delay_ms(SESSION_ID, 2, t, 'long', FIXED_RANGES)
                 for t in turns]
 
-        random.seed(0)
-        perturbed = []
-        for t in turns:
-            random.random()
-            perturbed.append(schedule.draw_delay_ms(SESSION_ID, 2, t, 'long', FIXED_RANGES))
-            random.seed(t * 7919)
+        # 전역 random 상태는 반드시 되돌린다. 되돌리지 않으면 같은 프로세스에서
+        # 뒤에 도는 검사들이 고정 시드를 물려받아, 검사 순서에 따라 결함이
+        # 가려지거나 재현되지 않는다.
+        saved_state = random.getstate()
+        try:
+            random.seed(0)
+            perturbed = []
+            for t in turns:
+                random.random()
+                perturbed.append(
+                    schedule.draw_delay_ms(SESSION_ID, 2, t, 'long', FIXED_RANGES))
+                random.seed(t * 7919)
+        finally:
+            random.setstate(saved_state)
         self.assertEqual(base, perturbed)
 
         # 호출 순서를 뒤집어도 같아야 한다.
@@ -339,6 +348,60 @@ class TestDrawDelay(unittest.TestCase):
         here = [schedule.draw_delay_ms(SESSION_ID, 3, t, 'long', FIXED_RANGES)
                 for t in range(1, 11)]
         self.assertEqual(outputs[0], here)
+
+    def test_delay_matches_the_documented_seed_formula(self):
+        """★ CONTRACT §0의 식 그대로인지 — 사후 재현 가능성의 전제.
+
+            D = uniform(min, max),  seed = SHA256(f"{session_id}|{conversation_index}|{turn_index}")
+
+        결정론과 프로세스 독립성만으로는 부족하다. 구현이 시드 재료를 바꾸면
+        (예: 참가자 번호만 쓰거나, 구분자를 '-'로 바꾸거나, 다이제스트를 md5로
+        바꾸면) 위의 다른 검사는 **전부 그대로 통과**하지만, 이미 수집한 로그의
+        session_id로 D를 다시 계산할 수 없게 된다. CONTRACT §0이 시드 결정론을
+        택한 유일한 이유가 그 재현 가능성이므로 여기서 식을 못 박는다.
+
+        그래서 이 검사는 구현을 호출하지 않고 계약 문서의 식을 직접 다시
+        구현해 대조한다.
+        """
+        ranges = live_ranges()
+        for sid in (SESSION_ID, 'P01-1', 'P24-1756400009999'):
+            for conv in range(1, 7):
+                for turn in range(1, 6):
+                    seed = ('%s|%d|%d' % (sid, conv, turn)).encode('utf-8')
+                    unit = int.from_bytes(hashlib.sha256(seed).digest()[:8], 'big') / 2 ** 64
+                    for condition in schedule.CONDITIONS:
+                        lo = ranges[condition]['min_ms']
+                        hi = ranges[condition]['max_ms']
+                        expected = lo + int(unit * (hi - lo))
+                        with self.subTest(sid=sid, conv=conv, turn=turn, condition=condition):
+                            self.assertEqual(
+                                schedule.draw_delay_ms(sid, conv, turn, condition, ranges),
+                                expected,
+                                'CONTRACT §0의 시드 식과 다르다 — 로그로 D를 재현할 수 없다')
+
+    def test_unknown_condition_raises(self):
+        """조건 이름이 틀리면 조용히 다른 범위로 떨어지면 안 된다.
+
+        기본 범위로 되돌아가거나 첫 조건으로 흘러가면 그 대화 5턴이 통째로
+        다른 조건으로 돌아가는데, 로그에는 요청받은 조건 이름이 그대로 남는다.
+        조건 라벨과 실제 지연이 어긋난 데이터는 사후에 구제할 수 없다.
+        """
+        for condition in ('inmediate', 'Medium', 'LONG', 'fast', '', None, 0):
+            with self.subTest(condition=condition):
+                with self.assertRaises(ValueError):
+                    schedule.draw_delay_ms(SESSION_ID, 1, 1, condition, FIXED_RANGES)
+
+    def test_practice_condition_label_is_rejected_outside_practice_index(self):
+        """'practice'는 conversation_index 0 전용 라벨이다 (CONTRACT §2).
+
+        분석 대상 대화에서 이 라벨이 통과해 버리면 그 턴은 800ms 고정으로
+        돌면서 로그에는 practice: false, 즉 분석 대상으로 남는다.
+        """
+        for ranges in (FIXED_RANGES, live_ranges()):
+            for conv in range(1, 7):
+                with self.subTest(conv=conv):
+                    with self.assertRaises(ValueError):
+                        schedule.draw_delay_ms(SESSION_ID, conv, 1, 'practice', ranges)
 
     def sample(self, condition, ranges, n_participants=20):
         draws = []

@@ -329,9 +329,19 @@ class PromptHashInvarianceTest(ServerCase):
 
 class DelayIndependenceTest(ServerCase):
 
+    # ★ 이 검사만 배율을 크게 잡는다 — 해상도 때문이다.
+    #   D는 정수 밀리초다. TEST_SCALE(0.01)의 즉시 조건이면 D가 10~20ms라
+    #   1ms가 D의 7%나 된다. 그러면 "D를 입력 길이에 비례해 몇 % 늘리는"
+    #   오염(예: target = int(target * (1 + len(text)/200000)))이 반올림으로
+    #   통째로 사라져서 이 검사가 조용히 통과한다. 실제로 그 구현을 넣고
+    #   전체 단위 검사 133개가 모두 통과하는 것을 확인했다.
+    #   배율 0.1 + 긺 조건이면 D가 1600~2000ms라 1ms가 0.06%다.
+    #   느려지는 비용은 세션 하나당 2초 미만이다.
+    delay_scale = 0.1
+
     def test_delay_identical_for_twenty_texts_of_wildly_different_length(self):
         s = self.new_session("P01")
-        conv = s["conversations"][0]
+        conv = self.conversation_with(s, "long")      # 목표 지연이 가장 큰 조건
         texts = []
         for i in range(20):
             n = [1, 2, 3, 5, 8, 13, 21, 34, 55, 89,
@@ -350,6 +360,15 @@ class DelayIndependenceTest(ServerCase):
             "★ P1 위반 — 같은 (세션, 대화, 턴)에서 입력 텍스트에 따라 목표 지연이 달라졌다.\n"
             + "\n".join("  %4d자 → %dms" % (n, d) for n, d, _ in results))
         self.assertEqual(len({n for n, _, _ in results}), 20, "길이가 20종이어야 한다")
+
+        # ★ 해상도 자물쇠 — 배율을 낮춰 이 검사를 무력화하지 못하게 한다.
+        #   D가 500ms 미만이면 1ms 미만의 비례 오염이 반올림으로 묻힌다.
+        d_ms = results[0][1]
+        self.assertGreaterEqual(
+            d_ms, 500,
+            "목표 지연이 %dms뿐이라 길이 비례 오염이 반올림으로 사라진다 — "
+            "이 검사가 통과해도 P1이 지켜졌다고 말할 수 없다. "
+            "DelayIndependenceTest.delay_scale을 되돌릴 것." % d_ms)
 
     def test_deadline_is_submit_plus_target(self):
         s = self.new_session("P01")
@@ -656,7 +675,9 @@ class TurnLifecycleTest(ServerCase):
         first = self.turn_and_display(s, conv["index"], 1, BENIGN[0])
         second = self.turn_and_display(s, conv["index"], 2, BENIGN[1])
 
-        typed_at = int(time.time() * 1000)
+        # 서버 시계와 겹치지 않는 값을 보낸다 — 그대로 저장되어야 한다.
+        # (서버가 자기 시계로 덮어쓰면 응답 잠복기 user_response_latency_ms가 깨진다)
+        typed_at = first["deadline_ts"] + 4321
         self.post("/api/turn/next-input",
                   {"turn_id": first["turn_id"], "next_input_start_ts": typed_at})
 
@@ -680,6 +701,27 @@ class TurnLifecycleTest(ServerCase):
         row = self.row_for(s, conv["index"], 1)
         self.assertIsInstance(row["display_ts"], int)
         self.assertEqual(row["display_ts"] - turn["deadline_ts"], out["display_error_ms"])
+
+    def test_display_ts_is_stored_verbatim_not_the_server_clock(self):
+        """★ display_ts는 브라우저가 화면에 붙인 직후 찍은 값이다 (CONTRACT §2·§7).
+
+        서버가 자기 시계로 덮어쓰면 부과 지연에 네트워크 왕복이 섞여 들어가고
+        주 종속변수(imposed_delay_ms)가 통째로 오염된다. 서버 시계와 절대
+        겹치지 않는 값을 보내 그대로 저장되는지 본다.
+        """
+        s = self.new_session("P01")
+        conv = s["conversations"][0]
+        turn = self.send_turn(s, conv["index"], 1, BENIGN[0])
+        marker = turn["deadline_ts"] + 137          # 서버의 now_ms와 137ms 이상 차이난다
+
+        out = self.post("/api/turn/display",
+                        {"turn_id": turn["turn_id"], "display_ts": marker})
+        self.assertEqual(out["display_error_ms"], 137,
+                         "display_error_ms는 보낸 display_ts − deadline이어야 한다")
+        row = self.row_for(s, conv["index"], 1)
+        self.assertEqual(row["display_ts"], marker,
+                         "★ 서버가 display_ts를 자기 시계로 덮어썼다 — "
+                         "부과 지연에 네트워크 왕복이 섞인다")
 
     def test_unknown_turn_id_is_rejected(self):
         self.post("/api/turn/display",

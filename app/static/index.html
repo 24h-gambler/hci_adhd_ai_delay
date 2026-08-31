@@ -5,13 +5,36 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>AI 대화 경험 연구</title>
+<style>
+/* 화면 전환의 뼈대만 인라인으로 둔다.
+   style.css 로드가 실패해도(아래 후보 경로 탐색이 모두 빗나가거나 서버가
+   404 대신 index.html을 돌려주는 경우) 여섯 화면과 설문·종료 화면이 한꺼번에
+   보이는 사고를 막는다. 나머지 모양은 전부 style.css가 담당한다. */
+[hidden] { display: none !important; }
+.screen { display: none; width: 100%; }
+.screen.is-active { display: block; }
+.screen-chat.is-active { display: flex; }
+</style>
 <script>
 /* 정적 파일이 '/' 아래에 놓이는지 '/static/' 아래에 놓이는지는 서버 구현에 달려 있다.
    두 경우 모두에서 동작하도록 후보 경로를 순서대로 시도한다. */
 (function () {
   var BASES = ['', '/', '/static/', 'static/'];
+  function fail(file) {
+    console.error('로드 실패: ' + file);
+    function paint() {
+      if (!document.body || document.getElementById('load-error')) { return; }
+      var p = document.createElement('p');
+      p.id = 'load-error';
+      p.className = 'noscript';
+      p.textContent = '화면을 불러오지 못했습니다. 연구자를 불러주세요.';
+      document.body.insertBefore(p, document.body.firstChild);
+    }
+    if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', paint); }
+    else { paint(); }
+  }
   function load(kind, file, i) {
-    if (i >= BASES.length) { console.error('로드 실패: ' + file); return; }
+    if (i >= BASES.length) { fail(file); return; }
     var url = BASES[i] + file;
     if (kind === 'css') {
       var l = document.createElement('link');

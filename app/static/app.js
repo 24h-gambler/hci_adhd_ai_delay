@@ -49,6 +49,7 @@
 
   var LIVE_KEY = 'exp.live';
   var LAST_SESSION_KEY = 'exp.lastSession';
+  var SURVEY_FAIL_KEY = 'exp.surveyFailures';   // 서버에 못 넣은 설문 응답 보관
 
   /* ==========================================================
      2. DOM 도우미
@@ -455,7 +456,7 @@
     var turnIndex = State.turnsSent + 1;
     var startTs = State.inputStartTs;
 
-    appendMessage('user', text);
+    var userBubble = appendMessage('user', text);
     scrollLogToEnd();
     D.chatInput.value = '';
     setComposerEnabled(false);
@@ -480,7 +481,10 @@
     }).catch(function (err) {
       console.error(err);
       // 턴이 성립하지 않았으므로 카운터를 되돌리고 재전송할 수 있게 둔다.
+      // 화면에 붙인 사용자 말풍선도 함께 거둔다 — 남겨 두면 재전송 때 같은
+      // 문장이 두 번 보이고, 화면 대화 기록이 로그의 턴 순서와 어긋난다.
       hideIndicator();
+      if (userBubble && userBubble.parentNode) { userBubble.parentNode.removeChild(userBubble); }
       State.awaiting = false;
       State.turnsSent = turnIndex - 1;
       if (State.screen === 'chat') { renderCounter(); }
@@ -628,7 +632,7 @@
 
   function openSafetyOverlay(p) {
     State.safetyEvents.push({
-      ts: p ? nowMs() : nowMs(),
+      ts: nowMs(),
       conversation_index: State.conversationIndex,
       turn_index: State.turnsSent,
       turn_id: p ? p.turnId : null,
@@ -830,6 +834,7 @@
   function sendSurvey(kind, responses) {
     var payload = {
       session_id: State.session.session_id,
+      participant_id: State.participantId,     // materials/05 "로그에 남길 것"
       kind: kind,
       conversation_index: State.conversationIndex,
       shown_ts: State.surveyShownTs,
@@ -838,6 +843,13 @@
     };
     var p = post('/api/survey', payload).catch(function (err) {
       console.error(err);
+      // 참가자를 화면에 붙잡아 두지는 않는다. 대신 응답을 브라우저에 남겨
+      // 나중에 연구자가 회수할 수 있게 한다 — 조용한 유실을 막는다.
+      try {
+        var kept = JSON.parse(localStorage.getItem(SURVEY_FAIL_KEY) || '[]');
+        kept.push(payload);
+        localStorage.setItem(SURVEY_FAIL_KEY, JSON.stringify(kept));
+      } catch (e) { /* localStorage 없음 — 무시 */ }
       toast('설문 저장에 문제가 있었습니다. 연구자를 불러주세요.');
     }).then(function () {
       nextStep();          // 응답이 저장된 뒤 진행. 뒤로 가기는 없다.
@@ -953,10 +965,17 @@
   }
 
   // 서버 응답 모양이 조금씩 달라도 견디도록 여러 후보 키를 훑는다.
+  // server.py의 /api/session/{id}/plan은 세션 계획을 `plan` 아래에 중첩해 돌려주므로
+  // (participant_number / block_order / conversations) 최상위와 plan 양쪽을 본다.
   function firstOf(obj, keys) {
     if (!obj) { return null; }
-    for (var i = 0; i < keys.length; i++) {
-      if (obj[keys[i]] != null) { return obj[keys[i]]; }
+    var scopes = [obj, obj.plan];
+    for (var s = 0; s < scopes.length; s++) {
+      var o = scopes[s];
+      if (!o || typeof o !== 'object') { continue; }
+      for (var i = 0; i < keys.length; i++) {
+        if (o[keys[i]] != null) { return o[keys[i]]; }
+      }
     }
     return null;
   }

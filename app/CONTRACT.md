@@ -81,13 +81,15 @@ python3 app/server.py --port 8000 --provider anthropic     # 실제 모델
   "session_id": "P01-1756400000000",
   "participant_number": 1,
   "block_order": ["a", "b"],
+  // ↓ P01(N=1)의 실제 배정. §4의 식으로 계산한 값이다.
+  //   블록 1 = PERMS[(1-1)%6] = PERMS[0], 블록 2 = PERMS[(1-1+3)%6] = PERMS[3]
   "conversations": [
-    {"index":1,"block":1,"context":"a","condition":"medium"},
+    {"index":1,"block":1,"context":"a","condition":"immediate"},
     {"index":2,"block":1,"context":"a","condition":"long"},
-    {"index":3,"block":1,"context":"a","condition":"immediate"},
+    {"index":3,"block":1,"context":"a","condition":"medium"},
     {"index":4,"block":2,"context":"b","condition":"long"},
-    {"index":5,"block":2,"context":"b","condition":"immediate"},
-    {"index":6,"block":2,"context":"b","condition":"medium"}
+    {"index":5,"block":2,"context":"b","condition":"medium"},
+    {"index":6,"block":2,"context":"b","condition":"immediate"}
   ],
   "turns_per_conversation": 5,
   "empathy_variant": "B",
