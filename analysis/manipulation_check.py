@@ -181,11 +181,16 @@ def load(paths):
 
 
 def derive(t):
-    t["imposed_delay_ms"] = t["display_ts"] - t["user_input_submit_ts"]
+    # display_ts는 None일 수 있다. 세션이 중간에 끝나면(참가자 철회, 안전 중단,
+    # 브라우저 종료) 그 턴은 화면에 표시되지 않은 채 로그에 남는다.
+    disp = t.get("display_ts")
+    t["displayed"] = disp is not None
+    t["imposed_delay_ms"] = (disp - t["user_input_submit_ts"]) if disp is not None else None
     t["llm_latency_ms"] = t["llm_response_ts"] - t["llm_request_ts"]
-    t["display_error_ms"] = t["imposed_delay_ms"] - t["target_delay_ms"]
+    t["display_error_ms"] = (
+        t["imposed_delay_ms"] - t["target_delay_ms"] if disp is not None else None)
     nxt = t.get("next_input_start_ts")
-    t["user_response_latency_ms"] = (nxt - t["display_ts"]) if nxt else None
+    t["user_response_latency_ms"] = (nxt - disp) if (nxt and disp is not None) else None
     start = t.get("user_input_start_ts")
     t["typing_ms"] = (t["user_input_submit_ts"] - start) if start else None
     if "ai_response_chars" not in t:
@@ -197,6 +202,7 @@ def analyzable(t):
     return (
         not t.get("practice")
         and not t.get("safety_flag")
+        and t.get("displayed")            # 표시되지 않은 턴은 부과 지연이 없다
         and t.get("condition") in CONDITIONS
     )
 
@@ -242,7 +248,18 @@ def run(turns, equiv_bound):
               for c, (lo, hi) in TARGET_RANGE_MS.items()}
 
     rep.head("0 · 데이터")
-    rep.say(f"  전체 턴 {len(turns)} / 분석 대상 {len(kept)} (연습·안전·조건외 제외 {dropped})")
+    n_practice = sum(1 for t in turns if t.get("practice"))
+    n_safety = sum(1 for t in turns if t.get("safety_flag") and not t.get("practice"))
+    n_undisplayed = sum(1 for t in turns
+                        if not t.get("displayed") and not t.get("practice")
+                        and not t.get("safety_flag"))
+    rep.say(f"  전체 턴 {len(turns)} / 분석 대상 {len(kept)} (제외 {dropped})")
+    rep.say(f"    연습 {n_practice} · 안전 경로 {n_safety} · 미표시(중단) {n_undisplayed}"
+            f" · 기타 {dropped - n_practice - n_safety - n_undisplayed}")
+    if n_undisplayed:
+        rep.say("    ※ 미표시 턴은 세션이 중간에 끝난 흔적이다. 논문에 이탈로 보고한다.")
+    rep.data["excluded"] = {"practice": n_practice, "safety": n_safety,
+                            "undisplayed": n_undisplayed}
     by_cond = defaultdict(list)
     for t in kept:
         by_cond[t["condition"]].append(t)
@@ -268,22 +285,41 @@ def run(turns, equiv_bound):
     # ★ 조건 내 부분상관이 주 지표다.
     #   전체 상관은 조건 간 지연 차이(1.5s / 8.5s / 18s)가 분산을 지배하므로
     #   구현이 틀려도 0 근처로 나온다. --demo-broken 으로 확인할 수 있다.
-    present = [c for c in CONDITIONS if len(by_cond[c]) >= 3]
-    rx, ry = [], []
-    for c in present:
-        sub = by_cond[c]
-        mc = mean([t["user_input_chars"] for t in sub])
-        md = mean([t["imposed_delay_ms"] for t in sub])
-        rx += [t["user_input_chars"] - mc for t in sub]
-        ry += [t["imposed_delay_ms"] - md for t in sub]
-    k = len(present)
-    n_eff = max(4, len(rx) - (k - 1))          # 조건 평균 k개를 추정한 만큼 df 차감
-    r = pearson(rx, ry)
+    def partial_r(cells):
+        """cells: 턴 -> 그룹 키. 그룹 평균으로 중심화한 뒤 상관을 낸다."""
+        groups = defaultdict(list)
+        for t in kept:
+            groups[cells(t)].append(t)
+        gx, gy = [], []
+        used = 0
+        for g in groups.values():
+            if len(g) < 3:
+                continue
+            used += 1
+            mc = mean([t["user_input_chars"] for t in g])
+            md = mean([t["imposed_delay_ms"] for t in g])
+            gx += [t["user_input_chars"] - mc for t in g]
+            gy += [t["imposed_delay_ms"] - md for t in g]
+        n_eff = max(4, len(gx) - max(0, used - 1))
+        return pearson(gx, gy), n_eff, len(gx), used
+
+    # ★ 조건뿐 아니라 턴 위치도 통제한다.
+    #   참가자는 턴 위치에 따라 체계적으로 길게/짧게 쓸 수 있고(워밍업, 피로),
+    #   표본이 작으면 D의 난수 추출이 우연히 턴 위치와 정렬될 수 있다.
+    #   두 가지가 겹치면 조건만 통제한 부분상관에 허위 상관이 뜬다.
+    r, n_eff, n_used, n_cells = partial_r(lambda t: (t["condition"], t.get("turn_index")))
+    r_cond, n_eff_c, _, _ = partial_r(lambda t: t["condition"])
     lo, hi = fisher_ci(r, n_eff)
     inside = (not math.isnan(lo)) and lo > -equiv_bound and hi < equiv_bound
-    rep.say(f"  ★ 조건 내 부분상관:  r = {fmt(r, 3)}   95% CI [{fmt(lo, 3)}, {fmt(hi, 3)}]"
-            f"   N = {len(rx)} (조건 {k}개 통제)")
+    rep.say(f"  ★ 조건 × 턴 위치 통제 부분상관:  r = {fmt(r, 3)}"
+            f"   95% CI [{fmt(lo, 3)}, {fmt(hi, 3)}]   N = {n_used} ({n_cells}개 칸)")
+    lc, hc = fisher_ci(r_cond, n_eff_c)
+    rep.say(f"    (조건만 통제:  r = {fmt(r_cond, 3)}   95% CI [{fmt(lc, 3)}, {fmt(hc, 3)}])")
+    if not math.isnan(r) and not math.isnan(r_cond) and abs(r_cond) - abs(r) > 0.10:
+        rep.say("    ※ 턴 위치를 통제하면 상관이 크게 줄었다. 입력 길이가 턴 위치를")
+        rep.say("      따라 체계적으로 변한다는 뜻이다 — 조작 실패가 아니라 발화 패턴이다.")
     rep.data["within_condition_r"] = None if math.isnan(r) else round(r, 4)
+    rep.data["condition_only_r"] = None if math.isnan(r_cond) else round(r_cond, 4)
     rep.data["within_condition_ci"] = [None if math.isnan(lo) else round(lo, 4),
                                        None if math.isnan(hi) else round(hi, 4)]
 
@@ -309,8 +345,15 @@ def run(turns, equiv_bound):
     rep.say("          구현이 틀려도 0 근처로 나온다 — --demo-broken 으로 재현된다.")
     rep.data["overall_r_do_not_report"] = None if math.isnan(r_all) else round(r_all, 4)
 
-    rep.check(f"조건 내 부분상관 |r| < {equiv_bound}",
-              (not math.isnan(r)) and abs(r) < equiv_bound, f"r = {fmt(r, 3)}")
+    # 조건별 검사와 같은 논리를 쓴다. |r| ≥ 한계만으로 실패시키면 표본이 작을 때
+    # 오경보가 난다 (N=60이면 SE ≈ .15). 신뢰구간이 0을 배제할 때만 실패로 본다.
+    pooled_noisy = math.isnan(lo) or (lo <= 0 <= hi)
+    pooled_bad = (not math.isnan(r)) and abs(r) >= equiv_bound and not pooled_noisy
+    rep.check(f"조건 × 턴 통제 부분상관 |r| < {equiv_bound} (95% CI가 0을 배제하는 경우만 실패)",
+              not pooled_bad,
+              f"r = {fmt(r, 3)}  CI [{fmt(lo, 3)}, {fmt(hi, 3)}]" if pooled_bad else
+              (f"r = {fmt(r, 3)}이지만 CI가 0을 포함 — 표본오차" if not math.isnan(r) and abs(r) >= equiv_bound
+               else f"r = {fmt(r, 3)}"))
     # 조건별 n은 전체의 1/3이라 표본오차가 크다 (n=240이면 SE ≈ .065).
     # |r| ≥ 한계만으로 실패시키면 우연히 튄 조건에서 오경보가 난다.
     # 3개 조건을 보므로 99% CI를 쓰고, CI가 0을 배제할 때만 실패로 본다.
@@ -334,7 +377,7 @@ def run(turns, equiv_bound):
     if not inside:
         rep.say("    ※ D는 입력을 보기 전에 난수로 뽑히므로 모상관은 설계상 정확히 0이다.")
         rep.say("       이 검사는 등가성 '입증'이 아니라 구현 검증이다 — 계획서 §1 참조.")
-    if (not math.isnan(r) and abs(r) >= equiv_bound) or bad:
+    if pooled_bad or bad:
         rep.say()
         rep.say("  ⚠ 구현을 의심할 것 (계획서 §1):")
         rep.say("    1) D를 전송 직후에 뽑는가, LLM 응답 후에 뽑는가")

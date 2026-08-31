@@ -68,7 +68,7 @@ body {
 #participant-app {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  height: 100%;
 }
 
 #topbar {
@@ -87,6 +87,7 @@ body {
   flex: 1 1 auto;
   display: flex;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .screen { display: none; width: 100%; }
@@ -274,7 +275,6 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
   flex-direction: column;
   min-height: 0;
   flex: 1 1 auto;
-  height: calc(100vh - 43px);
 }
 
 .chat-head { flex: 0 0 auto; padding: 0 0 12px; }

@@ -279,7 +279,8 @@ class Handler(BaseHTTPRequestHandler):
 def build_server(port=0, provider="mock", log_dir=None, latency_mode="length",
                  config_path=None, delay_scale=1.0, verbose=False):
     cfg = cfgmod.load_config(config_path or cfgmod.DEFAULT_CONFIG)
-    prov = llmmod.make_provider(provider, cfg, latency_mode)
+    # mock의 생성 시간도 지연 배율을 따라간다 (app/llm.py MockProvider 참조)
+    prov = llmmod.make_provider(provider, cfg, latency_mode, delay_scale)
     store = TurnStore(log_dir or (REPO_ROOT / "logs"))
     exp = Experiment(cfg, prov, store, delay_scale)
     handler = type("BoundHandler", (Handler,), {"exp": exp})

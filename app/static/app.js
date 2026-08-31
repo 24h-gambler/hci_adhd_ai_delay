@@ -95,6 +95,8 @@
   var State = {
     screen: 'consent',        // 논리 화면 이름 (practice는 chat 섹션을 공유한다)
     session: null,            // /api/session/start 응답 원본
+    participantId: null,
+    group: null,
     plan: [],                 // 화면 순서
     stepIndex: -1,
 
@@ -120,7 +122,7 @@
     doneReached: false
   };
 
-  var displayWaiters = [];    // e2e send() 해소용
+  var displayWaiters = [];    // e2e send() 해소용 [{resolve, reject}]
 
   /* ==========================================================
      5. 문안 (참가자에게 보이는 모든 문자열)
@@ -190,6 +192,8 @@
       list[i].classList.toggle('is-active', list[i].getAttribute('data-screen') === target);
     }
     State.screen = logical;
+    var scroller = $('screens');
+    if (scroller) { scroller.scrollTop = 0; }
     window.scrollTo(0, 0);
     publishLive();
   }
@@ -241,6 +245,8 @@
 
     D.consentError.hidden = true;
     D.btnStart.disabled = true;
+    State.participantId = pid;
+    State.group = group;
 
     post('/api/session/start', { participant_id: pid, group: group }).then(function (res) {
       State.session = res;
@@ -343,8 +349,9 @@
     State.awaiting = false;
 
     clear(D.chatLog);
-    D.chatTopic.textContent = isPractice ? PRACTICE_NOTE : (TOPIC_LINE[conv.context] || '');
-    D.chatNote.hidden = true;
+    D.chatTopic.textContent = isPractice ? '연습' : (TOPIC_LINE[conv.context] || '');
+    D.chatNote.textContent = isPractice ? PRACTICE_NOTE : '';
+    D.chatNote.hidden = !isPractice;
     D.endPanel.hidden = true;
     D.composer.hidden = false;
     D.chatInput.value = '';
@@ -482,6 +489,7 @@
       setComposerEnabled(true);
       toast('화면에 문제가 있습니다. 연구자를 불러주세요.');
       publishLive();
+      rejectDisplayWaiters(err);
     });
   }
 
@@ -603,7 +611,13 @@
   function resolveDisplayWaiters() {
     var list = displayWaiters;
     displayWaiters = [];
-    list.forEach(function (fn) { try { fn(); } catch (e) { console.error(e); } });
+    list.forEach(function (w) { try { w.resolve(); } catch (e) { console.error(e); } });
+  }
+
+  function rejectDisplayWaiters(err) {
+    var list = displayWaiters;
+    displayWaiters = [];
+    list.forEach(function (w) { try { w.reject(err); } catch (e) { console.error(e); } });
   }
 
   /* ==========================================================
@@ -664,8 +678,8 @@
       var lab = el('label', 'tick');
       var input = document.createElement('input');
       input.type = 'radio';
-      input.name = name;
-      input.value = String(v);
+      input.setAttribute('name', name);
+      input.setAttribute('value', String(v));
       lab.appendChild(input);
       lab.appendChild(el('span', null, String(v)));
       ticks.appendChild(lab);
@@ -678,7 +692,7 @@
 
   function radioValue(name) {
     var checked = document.querySelector('input[name="' + name + '"]:checked');
-    return checked ? Number(checked.value) : null;
+    return checked ? Number(checked.getAttribute('value')) : null;
   }
 
   function buildSurveyForm() {
@@ -730,7 +744,7 @@
     var missing = [];
 
     if (!unknown && raw === '') { missing.push('①'); }
-    if (!unknown && raw !== '' && !isFinite(Number(raw))) { missing.push('①'); }
+    if (!unknown && raw !== '' && (!isFinite(Number(raw)) || Number(raw) < 0)) { missing.push('①'); }
     if (radioValue('discomfort') == null) { missing.push('②'); }
     for (var i = 1; i <= 4; i++) {
       if (radioValue('pets_' + i) == null) { missing.push('③-' + i); }
@@ -860,7 +874,8 @@
       var payload = {
         updated_ts: nowMs(),
         session_id: State.session ? State.session.session_id : null,
-        participant_id: State.session ? State.session.participant_id : null,
+        participant_id: State.participantId,
+        group: State.group,
         participant_number: State.session ? State.session.participant_number : null,
         block_order: State.session ? State.session.block_order : null,
         conversations: State.session ? State.session.conversations : null,
@@ -959,7 +974,7 @@
       ['세션 ID', RS.sessionId || '—'],
       ['참가자', String(firstOf(planBody, ['participant_id']) || (live && live.participant_id) || '—') +
                  ' (' + String(firstOf(planBody, ['participant_number']) || (live && live.participant_number) || '—') + ')'],
-      ['집단', String(firstOf(planBody, ['group']) || '—')],
+      ['집단', String(firstOf(planBody, ['group']) || (live && live.group) || '—')],
       ['블록 순서', JSON.stringify(firstOf(planBody, ['block_order']) || (live && live.block_order) || [])],
       ['모델', String(firstOf(planBody, ['model']) || (live && live.model) || '—')],
       ['프롬프트', String(firstOf(planBody, ['prompt_version']) || (live && live.prompt_version) || '—') +
@@ -1120,8 +1135,9 @@
           if (isOverlayOpen()) { reject(new Error('안전 오버레이가 열려 있습니다')); return; }
           if (State.awaiting) { reject(new Error('이전 턴이 아직 끝나지 않았습니다')); return; }
           if (State.turnsSent >= State.turnsTotal) { reject(new Error('이 대화의 턴이 모두 끝났습니다')); return; }
+          if (!String(text).trim()) { reject(new Error('빈 메시지는 보낼 수 없습니다')); return; }
 
-          displayWaiters.push(resolve);
+          displayWaiters.push({ resolve: resolve, reject: reject });
           // 실제 입력과 같은 경로: 값 설정 → input 이벤트(첫 타자 기록) → 전송 버튼 클릭
           D.chatInput.value = String(text);
           D.chatInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1279,11 +1295,11 @@
 
     D.surveyForm.addEventListener('submit', function (e) {
       e.preventDefault();
-      submitSurvey();
+      State.lastSubmit = submitSurvey();
     });
     D.engagementForm.addEventListener('submit', function (e) {
       e.preventDefault();
-      submitEngagement();
+      State.lastSubmit = submitEngagement();
     });
 
     D.safetyUnlock.addEventListener('change', function () {

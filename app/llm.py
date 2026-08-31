@@ -64,9 +64,13 @@ class MockProvider:
       검증용 함정이므로 끄지 않는다.
     """
 
-    def __init__(self, config: dict, latency_mode: str = "length"):
+    def __init__(self, config: dict, latency_mode: str = "length", latency_scale: float = 1.0):
         self.model = f"mock-{latency_mode}"
         self.latency_mode = latency_mode
+        # E2E 고속 모드에서 지연 조건을 배율로 줄이면 mock의 생성 시간도 같은
+        # 배율로 줄여야 한다. 그러지 않으면 축소된 즉시 조건에서 항상 초과가
+        # 나서 조작 실패가 아닌 '테스트 설정 실패'가 된다.
+        self.latency_scale = float(latency_scale)
         self.max_tokens = int(config["model"]["max_tokens"])
         self.calls: list[dict] = []          # 테스트가 들여다본다
 
@@ -75,10 +79,12 @@ class MockProvider:
         h = hashlib.sha256((text + self.latency_mode).encode("utf-8")).digest()
         jitter = int.from_bytes(h[:2], "big") % 200
         if self.latency_mode == "fixed":
-            return 600 + jitter
-        if self.latency_mode == "slow":
-            return 2500 + jitter
-        return 280 + 3 * len(text) + jitter        # 'length' — 입력 길이 비례
+            base = 600 + jitter
+        elif self.latency_mode == "slow":
+            base = 2500 + jitter
+        else:
+            base = 280 + 3 * len(text) + jitter    # 'length' — 입력 길이 비례
+        return max(1, round(base * self.latency_scale))
 
     def complete(self, system: str, messages: list[dict]) -> dict:
         request_ts = now_ms()
@@ -161,9 +167,10 @@ class AnthropicProvider:
         }
 
 
-def make_provider(name: str, config: dict, latency_mode: str = "length"):
+def make_provider(name: str, config: dict, latency_mode: str = "length",
+                  latency_scale: float = 1.0):
     if name == "mock":
-        return MockProvider(config, latency_mode)
+        return MockProvider(config, latency_mode, latency_scale)
     if name == "anthropic":
         return AnthropicProvider(config, latency_mode)
     raise ValueError(f"알 수 없는 제공자: {name!r}")
