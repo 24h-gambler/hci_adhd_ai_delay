@@ -28,6 +28,32 @@
 **결정이 필요한 이유**: 이 선택이 표본 크기, 분석 모형, 논문의 주장
 범위를 전부 바꾼다.
 
+### Q18 · 어떤 모델을 쓸 것인가 — temperature를 쓸 수 있는 모델이 제한된다
+`materials/04-system-prompts.md §6`
+
+최신 Claude 모델(Opus 5, Sonnet 5, Opus 4.8/4.7, Fable 5)은 **`temperature`를
+400으로 거부한다.** 샘플링 파라미터가 제거되었고 `output_config.effort`로
+대체되었다. temperature를 쓰려면 Opus 4.6 / Sonnet 4.6 / Haiku 4.5 계열이어야 한다.
+
+동시에, 이 연구에서는 **생성 시간이 곧 실행 가능성**이다. 즉시 조건(1~2초)
+안에 응답이 도착하지 않으면 그 조건에서 conventional 전제가 깨진다(Q12).
+Opus 5는 사고가 기본으로 켜져 있어 느리다.
+
+| 선택 | temperature | 속도 | 품질 |
+| --- | --- | --- | --- |
+| **Haiku 4.5** (권고) | ✅ 0.6 그대로 | 가장 빠름 | 낮음 |
+| Sonnet 4.6 | ✅ | 중간 | 중간 |
+| Opus 5 / Sonnet 5 | ❌ `effort: low`로 대체 | 느림 | 높음 |
+
+**권고**: 파일럿에서 Haiku 4.5와 Sonnet 4.6의 생성 시간 분포를 재고,
+즉시 조건을 실현할 수 있는 가장 좋은 모델을 고른다. temperature 통제를
+포기하면서까지 상위 모델을 쓸 이유가 이 연구에는 없어 보인다 —
+과제는 "2~4문장으로 되묻기"이지 어려운 추론이 아니다.
+
+어느 쪽이든 **모델 ID와 파라미터를 논문 방법 절에 그대로 적는다.**
+`prompts.yaml`의 `model.id`는 아직 `TBD`이며, 앱은 `TBD`인 채로
+실제 모델을 호출하면 거부한다.
+
 ### Q8 · PETS를 축약해서 써도 되는가
 `materials/05-per-condition-survey.md` 문항 ③
 

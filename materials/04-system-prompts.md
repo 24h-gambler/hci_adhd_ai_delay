@@ -224,6 +224,37 @@ prompts/test_cases.md            세션 전 테스트 6개
 | 스트리밍 | **끔** | ★ 아래 |
 | system prompt | 지연 조건 3수준 간 완전 동일 | 조작 분리의 전제 |
 
+### 🔴 temperature 0.6은 최신 Claude 모델에서 **쓸 수 없다**
+
+앱의 API 클라이언트를 만들다 확인한 사실이다.
+
+| 모델 | `temperature` | 비고 |
+| --- | --- | --- |
+| Claude Opus 5 / Sonnet 5 / Opus 4.8 / 4.7 / Fable 5 | **거부 (400)** | 샘플링 파라미터가 제거됨 |
+| Claude Opus 4.6 / Sonnet 4.6 | 허용 | `effort`도 지원 |
+| Claude Haiku 4.5 | 허용 | `effort` 미지원. **가장 빠름** |
+
+최신 모델에서는 `temperature` 대신 `output_config.effort`
+(`low`/`medium`/`high`/…)로 사고 깊이와 토큰 지출을 조절한다.
+Opus 5는 **사고(thinking)가 기본으로 켜져 있어** 생성 시간이 늘어난다.
+
+**이 연구에서는 생성 시간이 곧 실행 가능성이다.** 즉시 조건(1~2초) 안에
+응답이 도착해야 하므로, 느린 모델은 조건 하나를 통째로 무너뜨린다.
+
+세 갈래 중 하나를 골라야 한다.
+
+| 선택 | 얻는 것 | 잃는 것 |
+| --- | --- | --- |
+| **Haiku 4.5** | temperature 0.6 그대로 사용 가능. 가장 빠름 → 즉시 조건 실현 가능성 최고 | 응답 품질이 상위 모델보다 낮음 |
+| **Sonnet 4.6** | temperature 사용 가능, 품질과 속도의 절충 | Haiku보다 느림 |
+| **Opus 5 / Sonnet 5** | 최신·최고 품질 | **temperature 통제 포기**. `effort: low`로 대체하고 그 사실을 논문에 기술해야 함. 사고가 켜져 있어 느림 |
+
+앱은 세 경우를 모두 처리한다. `prompts.yaml`의 `model.id`를 보고
+`temperature`를 지원하지 않는 모델이면 **조용히 빼는 대신 로그에 남긴다**
+(`app/llm.py: supports_temperature`).
+
+→ `OPEN_QUESTIONS.md` Q18. **지도교수 확인 필요.**
+
 ### ⚠️ max_tokens 200 — 파일럿에서 반드시 확인할 것
 
 의도는 맞다. 응답이 길면 생성 시간이 길어지고, 목표 지연 안에 못 들어오면

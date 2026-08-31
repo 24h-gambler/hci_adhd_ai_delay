@@ -235,6 +235,12 @@ def run(turns, equiv_bound):
     kept = [t for t in turns if analyzable(t)]
     dropped = len(turns) - len(kept)
 
+    # E2E 고속 모드로 수집된 로그는 조건 범위가 배율만큼 축소되어 있다.
+    scales = {float(t.get("delay_scale") or 1.0) for t in kept} or {1.0}
+    scale = scales.pop() if len(scales) == 1 else 1.0
+    ranges = {c: (round(lo * scale), round(hi * scale))
+              for c, (lo, hi) in TARGET_RANGE_MS.items()}
+
     rep.head("0 · 데이터")
     rep.say(f"  전체 턴 {len(turns)} / 분석 대상 {len(kept)} (연습·안전·조건외 제외 {dropped})")
     by_cond = defaultdict(list)
@@ -244,6 +250,11 @@ def run(turns, equiv_bound):
         rep.say(f"    {CONDITION_KO[c]:<4} {len(by_cond[c]):>5} 턴")
     parts = sorted({t.get("participant_id", "?") for t in kept})
     rep.say(f"  참가자 {len(parts)}명: {', '.join(parts[:12])}{' …' if len(parts) > 12 else ''}")
+    if len(scales) > 0:
+        rep.check("delay_scale이 로그 전체에서 단일", False, "여러 배율이 섞여 있다 — 합쳐서 분석하면 안 된다")
+    elif scale != 1.0:
+        rep.say(f"  ⚠ delay_scale = {scale} — 지연이 축소된 로그다. 검증용이며 본 실험 데이터가 아니다.")
+    rep.data["delay_scale"] = scale
     rep.data["n_turns"] = len(kept)
     rep.data["n_participants"] = len(parts)
 
@@ -341,7 +352,7 @@ def run(turns, equiv_bound):
             continue
         d = [t["imposed_delay_ms"] for t in sub]
         e = [abs(t["display_error_ms"]) for t in sub]
-        lo_r, hi_r = TARGET_RANGE_MS[c]
+        lo_r, hi_r = ranges[c]
         out = [t for t in sub if not (lo_r - DISPLAY_TOLERANCE_MS <= t["target_delay_ms"] <= hi_r + DISPLAY_TOLERANCE_MS)]
         ok_range = ok_range and not out
         rep.say(f"  {CONDITION_KO[c]:<6}{len(sub):>5}{fmt(mean(d), 0) + ' (' + fmt(sd(d), 0) + ')':>24}"
@@ -381,7 +392,7 @@ def run(turns, equiv_bound):
         first, last = min(by_turn), max(by_turn)
         growth = mean(by_turn[last]) - mean(by_turn[first])
         rep.say(f"    턴 {first} → {last} 증가분: {fmt(growth, 0)}ms")
-        floor = min(TARGET_RANGE_MS[c][0] for c in CONDITIONS if by_cond[c])
+        floor = min(ranges[c][0] for c in CONDITIONS if by_cond[c])
         rep.check("마지막 턴 생성 시간이 가장 짧은 목표 지연 하한 미만",
                   max(by_turn[last]) < floor,
                   f"턴 {last} 최대 {max(by_turn[last])}ms vs 하한 {floor}ms")
@@ -391,10 +402,10 @@ def run(turns, equiv_bound):
     all_lat = sorted(t["llm_latency_ms"] for t in kept)
     p95 = all_lat[min(len(all_lat) - 1, int(0.95 * len(all_lat)))]
     rep.say(f"    LLM 생성 시간 p50 {all_lat[len(all_lat)//2]}ms · p95 {p95}ms · max {all_lat[-1]}ms")
-    infeasible = [c for c in CONDITIONS if by_cond[c] and TARGET_RANGE_MS[c][0] < p95]
+    infeasible = [c for c in CONDITIONS if by_cond[c] and ranges[c][0] < p95]
     for c in CONDITIONS:
         if by_cond[c]:
-            floor = TARGET_RANGE_MS[c][0]
+            floor = ranges[c][0]
             mark = "✗" if floor < p95 else "✓"
             rep.say(f"    {mark} {CONDITION_KO[c]:<4} 하한 {floor}ms {'<' if floor < p95 else '≥'} p95 {p95}ms")
     rep.check("모든 조건의 목표 지연 하한 ≥ LLM 생성 p95", not infeasible,
