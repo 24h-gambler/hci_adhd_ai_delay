@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>AI 대화 경험 연구</title>
+<style>
+/* 화면 전환의 뼈대만 인라인으로 둔다.
+   style.css 로드가 실패해도(아래 후보 경로 탐색이 모두 빗나가거나 서버가
+   404 대신 index.html을 돌려주는 경우) 여섯 화면과 설문·종료 화면이 한꺼번에
+   보이는 사고를 막는다. 나머지 모양은 전부 style.css가 담당한다. */
+[hidden] { display: none !important; }
+.screen { display: none; width: 100%; }
+.screen.is-active { display: block; }
+.screen-chat.is-active { display: flex; }
+</style>
+<script>
+/* 정적 파일이 '/' 아래에 놓이는지 '/static/' 아래에 놓이는지는 서버 구현에 달려 있다.
+   두 경우 모두에서 동작하도록 후보 경로를 순서대로 시도한다. */
+(function () {
+  var BASES = ['', '/', '/static/', 'static/'];
+  function fail(file) {
+    console.error('로드 실패: ' + file);
+    function paint() {
+      if (!document.body || document.getElementById('load-error')) { return; }
+      var p = document.createElement('p');
+      p.id = 'load-error';
+      p.className = 'noscript';
+      p.textContent = '화면을 불러오지 못했습니다. 연구자를 불러주세요.';
+      document.body.insertBefore(p, document.body.firstChild);
+    }
+    if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', paint); }
+    else { paint(); }
+  }
+  function load(kind, file, i) {
+    if (i >= BASES.length) { fail(file); return; }
+    var url = BASES[i] + file;
+    if (kind === 'css') {
+      var l = document.createElement('link');
+      l.rel = 'stylesheet';
+      l.href = url;
+      l.onerror = function () { l.parentNode && l.parentNode.removeChild(l); load(kind, file, i + 1); };
+      document.head.appendChild(l);
+    } else {
+      var s = document.createElement('script');
+      s.src = url;
+      s.onerror = function () { s.parentNode && s.parentNode.removeChild(s); load(kind, file, i + 1); };
+      s.onload = function () { if (!window.__EXP_LOADED__) load(kind, file, i + 1); };
+      document.head.appendChild(s);
+    }
+  }
+  load('css', 'style.css', 0);
+  load('js', 'app.js', 0);
+})();
+</script>
+</head>
+<body>
+
+<noscript>
+  <p class="noscript">이 화면은 자바스크립트가 필요합니다. 연구자를 불러주세요.</p>
+</noscript>
+
+<!-- ============================================================
+     참가자 화면
+     ============================================================ -->
+<div id="participant-app" hidden>
+
+  <header id="topbar">
+    <span class="topbar-title">AI 대화 경험 연구</span>
+  </header>
+
+  <main id="screens">
+
+    <!-- ---------- 동의 확인 ---------- -->
+    <section class="screen" data-screen="consent">
+      <div class="col">
+        <h1>AI 대화 경험 연구</h1>
+        <p class="lead">참여해 주셔서 감사합니다. 아래 내용을 확인한 뒤 시작해 주세요.</p>
+
+        <div class="panel">
+          <ul class="plain">
+            <li>오늘 하실 일은 AI 챗봇과 여섯 번의 짧은 대화를 나누는 것입니다.</li>
+            <li>대화가 하나 끝날 때마다 세 항목의 짧은 질문에 답해 주시면 됩니다.</li>
+            <li>대화가 모두 끝나면 40분 정도 이야기를 나누는 시간을 갖습니다. 이 부분은 녹음됩니다.</li>
+            <li>언제든 “그만하겠습니다”라고 하시면 바로 멈춥니다. 불이익은 없고 사례비는 그대로 드립니다.</li>
+          </ul>
+        </div>
+
+        <label class="check-line">
+          <input type="checkbox" id="consent-check">
+          <span>동의서에 서명했으며, 위 내용을 확인하고 연구 참여에 동의합니다.</span>
+        </label>
+
+        <fieldset class="panel researcher-input">
+          <legend>연구자 입력란</legend>
+          <div class="field-row">
+            <label for="pid">참가자 ID</label>
+            <input type="text" id="pid" placeholder="P01" autocomplete="off" spellcheck="false" size="8">
+            <span class="hint">P01 형식</span>
+          </div>
+          <div class="field-row">
+            <label for="group">집단</label>
+            <select id="group">
+              <option value="adhd">adhd — ADHD 경향</option>
+              <option value="comparison">comparison — 비교</option>
+            </select>
+          </div>
+        </fieldset>
+
+        <p class="error" id="consent-error" hidden></p>
+        <button type="button" class="btn btn-primary" id="btn-start" data-primary>시작</button>
+      </div>
+    </section>
+
+    <!-- ---------- 사전 안내문 (materials/02 §5 인쇄물 버전) ---------- -->
+    <section class="screen" data-screen="briefing">
+      <div class="col">
+        <h1>오늘의 진행</h1>
+
+        <div class="sheet">
+          <p class="sheet-title">AI 대화 경험 연구 · 오늘의 진행</p>
+          <ol class="sheet-list">
+            <li>AI 챗봇과 여섯 번의 짧은 대화를 나눕니다.</li>
+            <li>대화 하나는 다섯 번 주고받으면 마무리됩니다.</li>
+            <li>대화가 끝날 때마다 세 항목의 짧은 질문에 답합니다.</li>
+            <li>모든 대화가 끝나면 40분 정도 이야기를 나눕니다. (녹음)</li>
+          </ol>
+          <ul class="sheet-dots">
+            <li>카드에 적힌 범위 안에서는 무슨 이야기를 하셔도 좋습니다.</li>
+            <li>정답이 있는 과제가 아닙니다.</li>
+            <li>언제든 “그만하겠습니다”라고 하시면 바로 멈춥니다.<br>불이익은 없고 사례비는 그대로 드립니다.</li>
+          </ul>
+
+          <hr class="sheet-rule">
+
+          <p class="sheet-subtitle">이번 연구에서 다루지 않는 주제</p>
+          <ul class="sheet-dots">
+            <li>자해나 자살에 관한 생각</li>
+            <li>타인을 해치는 것에 관한 생각</li>
+            <li>범죄나 법적 문제</li>
+            <li>급성 위기 상황</li>
+          </ul>
+          <p class="sheet-note">
+            이런 문제로 도움이 필요하시면 AI가 아니라 연구자에게 말씀해주세요.<br>
+            전문 상담 기관을 안내해드리겠습니다.
+          </p>
+
+          <hr class="sheet-rule">
+
+          <p class="sheet-foot">연구책임자: ______  연락처: ______  IRB 승인번호: ______</p>
+        </div>
+
+        <button type="button" class="btn btn-primary" data-primary data-action="next">다음</button>
+      </div>
+    </section>
+
+    <!-- ---------- 주제 안내 카드 (materials/03 §1 / §2) ---------- -->
+    <section class="screen" data-screen="card">
+      <div class="col">
+        <h1>주제 안내</h1>
+        <div class="topic-card" id="topic-card">
+          <p class="topic-card-title" id="topic-card-title">이번에는 이런 이야기를 해 주세요</p>
+          <div class="topic-card-body" id="topic-card-body"></div>
+        </div>
+        <button type="button" class="btn btn-primary" data-primary data-action="next">시작</button>
+      </div>
+    </section>
+
+    <!-- ---------- 대화 (연습 턴과 본 대화가 공용) ---------- -->
+    <section class="screen screen-chat" data-screen="chat">
+      <div class="chat-wrap">
+        <div class="chat-head">
+          <p class="chat-topic" id="chat-topic"></p>
+          <p class="chat-progress" id="chat-progress" hidden>
+            <span id="chat-progress-text"></span>
+            <span class="chat-counter" id="chat-counter"></span>
+          </p>
+        </div>
+
+        <div class="chat-log" id="chat-log" role="log" aria-live="off"></div>
+
+        <div class="chat-foot">
+          <p class="chat-note" id="chat-note" hidden></p>
+
+          <div class="composer" id="composer">
+            <label class="sr-only" for="chat-input">메시지</label>
+            <textarea id="chat-input" rows="2" placeholder="메시지를 입력하세요" autocomplete="off"
+                      spellcheck="false" enterkeyhint="send"></textarea>
+            <button type="button" class="btn btn-send" id="btn-send">보내기</button>
+          </div>
+
+          <div class="end-panel" id="end-panel" hidden>
+            <p id="end-text">이 대화는 마무리되었습니다.</p>
+            <button type="button" class="btn btn-primary" id="btn-end-next" data-primary data-action="next">다음</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- 대화 직후 문항 · 3개 · 6회 (명세서 §1) ---------- -->
+    <section class="screen" data-screen="survey">
+      <div class="col">
+        <h1>방금 대화에 대한 질문</h1>
+        <p class="lead">세 항목입니다. 답한 뒤에는 되돌아갈 수 없으니 확인하고 제출해 주세요.</p>
+
+        <form id="survey-form" novalidate>
+
+          <fieldset class="q">
+            <legend>①</legend>
+            <p class="q-text">방금 대화에서, 메시지를 보낸 뒤 AI의 답이 화면에 나타나기까지 대체로 몇 초쯤 걸렸다고 느끼셨나요?</p>
+            <div class="q-inline">
+              <span>약</span>
+              <label class="sr-only" for="q-time">초</label>
+              <input type="number" id="q-time" min="0" max="600" step="0.5" inputmode="decimal">
+              <span>초</span>
+              <label class="check-line inline"><input type="checkbox" id="q-time-unknown"><span>모르겠음</span></label>
+            </div>
+          </fieldset>
+
+          <fieldset class="q">
+            <legend>②</legend>
+            <p class="q-text">방금 대화는 얼마나 불편하셨나요?</p>
+            <div id="q-discomfort"></div>
+          </fieldset>
+
+          <fieldset class="q">
+            <legend>③</legend>
+            <label class="q-text" for="q-word">방금 대화를 한 단어로 표현한다면 무엇인가요?</label>
+            <input type="text" id="q-word" maxlength="30" autocomplete="off" spellcheck="false">
+            <p class="q-sub">떠오르는 대로 적어 주세요. 어떤 단어든 괜찮습니다.</p>
+          </fieldset>
+
+          <p class="error" id="survey-error" hidden></p>
+          <button type="submit" class="btn btn-primary" data-primary>제출</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ---------- 블록 종료 문항 · 2회 (명세서 §2) ---------- -->
+    <section class="screen" data-screen="engagement">
+      <div class="col">
+        <h1 id="block-end-title">방금 나눈 이야기에 대해</h1>
+        <p class="lead" id="block-end-lead">정답이 없는 질문입니다. 편하게 답해 주세요.</p>
+
+        <form id="engagement-form" novalidate>
+
+          <fieldset class="q">
+            <legend>가</legend>
+            <p class="q-text">방금 대화한 AI에 대해 어떻게 느끼셨는지 표시해 주세요.</p>
+            <p class="placeholder-note">
+              ⚠ 아래 네 문항은 <strong>자리표시자</strong>입니다.
+              PETS(Schmidmaier et al., CHI 2024) 원척도 문항으로 교체한 뒤 본 실험을 시작합니다.
+            </p>
+            <div id="q-pets"></div>
+          </fieldset>
+
+          <fieldset class="q">
+            <legend>나</legend>
+            <p class="q-text">방금 대화한 AI에 대한 인상을 표시해 주세요.</p>
+            <div id="q-godspeed"></div>
+          </fieldset>
+
+          <!-- 관여 지수 — 고민 상담 블록에만 (명세서 §2-2) -->
+          <div id="engagement-block" hidden>
+            <fieldset class="q">
+              <legend>다</legend>
+              <div id="q-engagement"></div>
+            </fieldset>
+          </div>
+
+          <p class="error" id="engagement-error" hidden></p>
+          <button type="submit" class="btn btn-primary" data-primary>제출</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ---------- 휴식 ---------- -->
+    <section class="screen" data-screen="break">
+      <div class="col">
+        <h1>잠시 다른 활동을 하겠습니다</h1>
+        <div class="panel">
+          <p>여기까지 절반이 끝났습니다. 3분 정도 다른 활동을 하겠습니다.</p>
+          <p>자리에서 편하게 계시면 되고, 연구자가 안내하면 아래 버튼을 눌러 주세요.</p>
+        </div>
+        <button type="button" class="btn btn-primary" data-primary data-action="next">계속하기</button>
+      </div>
+    </section>
+
+    <!-- ---------- 종료 ---------- -->
+    <section class="screen" data-screen="done">
+      <div class="col">
+        <h1>모두 끝났습니다</h1>
+        <div class="panel">
+          <p>오늘의 대화와 설문이 모두 끝났습니다. 참여해 주셔서 감사합니다.</p>
+          <p>연구자에게 알려 주세요. 이어서 이야기를 나누는 시간이 있습니다.</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ============================================================
+     안전 경로 오버레이 (참가자 화면 위를 완전히 덮는다)
+     ============================================================ -->
+<div id="safety-overlay" hidden>
+  <div class="safety-box" role="alertdialog" aria-labelledby="safety-title">
+    <p class="safety-title" id="safety-title">연구자를 불러주세요.</p>
+    <div class="safety-researcher">
+      <p class="safety-researcher-label">연구자 전용</p>
+      <label class="check-line"><input type="checkbox" id="safety-unlock"><span>연구자 확인</span></label>
+      <div class="safety-buttons">
+        <button type="button" class="btn" id="safety-continue" disabled>계속</button>
+        <button type="button" class="btn btn-danger" id="safety-end" disabled>종료</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     연구자 화면 (?researcher=1)
+     ============================================================ -->
+<div id="researcher-app" hidden>
+  <header class="rs-bar">
+    <span class="rs-badge">연구자 전용 화면</span>
+    <span class="rs-title">참가자에게 보여주지 않습니다</span>
+    <span class="rs-clock" id="rs-updated"></span>
+  </header>
+
+  <div class="rs-body">
+    <section class="rs-card">
+      <h2>세션</h2>
+      <div class="rs-session-pick">
+        <label for="rs-session-id">세션 ID</label>
+        <input type="text" id="rs-session-id" placeholder="P01-1756400000000" autocomplete="off" spellcheck="false">
+        <button type="button" class="btn btn-small" id="rs-load">불러오기</button>
+      </div>
+      <dl class="rs-kv" id="rs-meta"></dl>
+    </section>
+
+    <section class="rs-card">
+      <h2>현재 진행 위치</h2>
+      <div id="rs-position" class="rs-position">아직 진행 정보가 없습니다.</div>
+    </section>
+
+    <section class="rs-card rs-alert-card">
+      <h2>안전 경보 이력</h2>
+      <div id="rs-safety">경보 없음</div>
+    </section>
+
+    <section class="rs-card">
+      <h2>세션 계획표</h2>
+      <table class="rs-table" id="rs-plan">
+        <thead>
+          <tr><th>대화</th><th>블록</th><th>맥락</th><th>조건</th><th>상태</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p class="rs-note">대화 0은 연습 턴이며 분석에서 제외됩니다.</p>
+    </section>
+
+    <section class="rs-card">
+      <h2>표시 시각 오차</h2>
+      <table class="rs-table" id="rs-display">
+        <thead>
+          <tr><th>turn_id</th><th>목표 시각</th><th>표시 시각</th><th>오차(ms)</th><th>조작</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p class="rs-note">오차 = 표시 시각 − (전송 시각 + 목표 지연). 참가자 화면 탭이 열려 있을 때만 갱신됩니다.</p>
+    </section>
+
+    <section class="rs-card">
+      <h2>서버 응답 원본</h2>
+      <details><summary>펼치기</summary><pre id="rs-raw"></pre></details>
+    </section>
+  </div>
+</div>
+
+<div id="toast" hidden></div>
+
+</body>
+</html>

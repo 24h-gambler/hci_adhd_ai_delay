@@ -34,21 +34,25 @@ conventional 조작이 성립한다 → `analysis/10-manipulation-check-plan.md`
 
 ```
 ①  동의서 서명                         → materials/09-irb-package.md
-②  세션 안내 (지연 언급 없음)            → materials/02-participant-briefing.md
+②  세션 안내 (응답 시간 언급 없음)       → materials/02-participant-briefing.md
 ③  연습 1턴 (조건 지연 미적용)           → materials/02 §4
 ──────────── 블록 1 (맥락 X) ────────────
 ④  주제 안내 카드                       → materials/03-topic-cards.md
-⑤  대화 1 → 조건별 설문                 → materials/05-per-condition-survey.md
-⑥  대화 2 → 조건별 설문
-⑦  대화 3 → 조건별 설문
-──────────── 휴식 과제 3분 ──────────────
+⑤  대화 1 → 대화 직후 문항 3개          → materials/05
+⑥  대화 2 → 대화 직후 문항 3개
+⑦  대화 3 → 대화 직후 문항 3개
+⑧  블록 종료 문항                       → materials/06
+      PETS · Godspeed I (두 블록 모두)
+      관여 지수 (고민 상담 블록에만)
+──────── "잠시 다른 활동을 하겠습니다" 3분 ────────
 ──────────── 블록 2 (맥락 Y) ────────────
-⑧  주제 안내 카드                       → materials/03
-⑨  대화 4~6 → 각 조건별 설문            → materials/05
-⑩  정서적 관여 확인 (맥락 B 블록 직후)   → materials/06-emotional-engagement-check.md
-──────────── 인터뷰 40~50분 ─────────────
-⑪  로그를 화면에 띄우고 반구조화 면접     → materials/07-interview-guide.md
-⑫  디브리핑                             → materials/08-debriefing-script.md
+⑨  주제 안내 카드 → 대화 4~6 + 각 직후 문항 → 블록 종료 문항
+──────────── 휴식 5분 ────────────
+⑩  인터뷰 32분 (5단계)                  → materials/07-interview-guide.md
+      도입2 · 개방4 · 회상8 · 대비8 · 귀인10
+      회상 화면: 주제·시간추정·불편감·한 단어 (조건 미표시)
+⑪  디브리핑 (조작 공개는 여기서 1회)     → materials/08-debriefing-script.md
+⑫  세션 직후 기록 10분 안               → materials/07 말미
 ```
 
 사전 스크리닝(온라인, 방문 전)은 `materials/01-prescreening-survey.md`.

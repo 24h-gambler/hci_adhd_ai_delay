@@ -25,6 +25,12 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prompts"))
+try:
+    import response_rules
+except ImportError:
+    response_rules = None
+
 CONDITIONS = ["immediate", "medium", "long"]
 CONDITION_KO = {"immediate": "즉시", "medium": "중간", "long": "긺"}
 CONTEXT_KO = {"a": "A 일상", "b": "B 고민"}
@@ -175,11 +181,16 @@ def load(paths):
 
 
 def derive(t):
-    t["imposed_delay_ms"] = t["display_ts"] - t["user_input_submit_ts"]
+    # display_ts는 None일 수 있다. 세션이 중간에 끝나면(참가자 철회, 안전 중단,
+    # 브라우저 종료) 그 턴은 화면에 표시되지 않은 채 로그에 남는다.
+    disp = t.get("display_ts")
+    t["displayed"] = disp is not None
+    t["imposed_delay_ms"] = (disp - t["user_input_submit_ts"]) if disp is not None else None
     t["llm_latency_ms"] = t["llm_response_ts"] - t["llm_request_ts"]
-    t["display_error_ms"] = t["imposed_delay_ms"] - t["target_delay_ms"]
+    t["display_error_ms"] = (
+        t["imposed_delay_ms"] - t["target_delay_ms"] if disp is not None else None)
     nxt = t.get("next_input_start_ts")
-    t["user_response_latency_ms"] = (nxt - t["display_ts"]) if nxt else None
+    t["user_response_latency_ms"] = (nxt - disp) if (nxt and disp is not None) else None
     start = t.get("user_input_start_ts")
     t["typing_ms"] = (t["user_input_submit_ts"] - start) if start else None
     if "ai_response_chars" not in t:
@@ -191,6 +202,7 @@ def analyzable(t):
     return (
         not t.get("practice")
         and not t.get("safety_flag")
+        and t.get("displayed")            # 표시되지 않은 턴은 부과 지연이 없다
         and t.get("condition") in CONDITIONS
     )
 
@@ -229,8 +241,25 @@ def run(turns, equiv_bound):
     kept = [t for t in turns if analyzable(t)]
     dropped = len(turns) - len(kept)
 
+    # E2E 고속 모드로 수집된 로그는 조건 범위가 배율만큼 축소되어 있다.
+    scales = {float(t.get("delay_scale") or 1.0) for t in kept} or {1.0}
+    scale = scales.pop() if len(scales) == 1 else 1.0
+    ranges = {c: (round(lo * scale), round(hi * scale))
+              for c, (lo, hi) in TARGET_RANGE_MS.items()}
+
     rep.head("0 · 데이터")
-    rep.say(f"  전체 턴 {len(turns)} / 분석 대상 {len(kept)} (연습·안전·조건외 제외 {dropped})")
+    n_practice = sum(1 for t in turns if t.get("practice"))
+    n_safety = sum(1 for t in turns if t.get("safety_flag") and not t.get("practice"))
+    n_undisplayed = sum(1 for t in turns
+                        if not t.get("displayed") and not t.get("practice")
+                        and not t.get("safety_flag"))
+    rep.say(f"  전체 턴 {len(turns)} / 분석 대상 {len(kept)} (제외 {dropped})")
+    rep.say(f"    연습 {n_practice} · 안전 경로 {n_safety} · 미표시(중단) {n_undisplayed}"
+            f" · 기타 {dropped - n_practice - n_safety - n_undisplayed}")
+    if n_undisplayed:
+        rep.say("    ※ 미표시 턴은 세션이 중간에 끝난 흔적이다. 논문에 이탈로 보고한다.")
+    rep.data["excluded"] = {"practice": n_practice, "safety": n_safety,
+                            "undisplayed": n_undisplayed}
     by_cond = defaultdict(list)
     for t in kept:
         by_cond[t["condition"]].append(t)
@@ -238,6 +267,11 @@ def run(turns, equiv_bound):
         rep.say(f"    {CONDITION_KO[c]:<4} {len(by_cond[c]):>5} 턴")
     parts = sorted({t.get("participant_id", "?") for t in kept})
     rep.say(f"  참가자 {len(parts)}명: {', '.join(parts[:12])}{' …' if len(parts) > 12 else ''}")
+    if len(scales) > 0:
+        rep.check("delay_scale이 로그 전체에서 단일", False, "여러 배율이 섞여 있다 — 합쳐서 분석하면 안 된다")
+    elif scale != 1.0:
+        rep.say(f"  ⚠ delay_scale = {scale} — 지연이 축소된 로그다. 검증용이며 본 실험 데이터가 아니다.")
+    rep.data["delay_scale"] = scale
     rep.data["n_turns"] = len(kept)
     rep.data["n_participants"] = len(parts)
 
@@ -251,22 +285,41 @@ def run(turns, equiv_bound):
     # ★ 조건 내 부분상관이 주 지표다.
     #   전체 상관은 조건 간 지연 차이(1.5s / 8.5s / 18s)가 분산을 지배하므로
     #   구현이 틀려도 0 근처로 나온다. --demo-broken 으로 확인할 수 있다.
-    present = [c for c in CONDITIONS if len(by_cond[c]) >= 3]
-    rx, ry = [], []
-    for c in present:
-        sub = by_cond[c]
-        mc = mean([t["user_input_chars"] for t in sub])
-        md = mean([t["imposed_delay_ms"] for t in sub])
-        rx += [t["user_input_chars"] - mc for t in sub]
-        ry += [t["imposed_delay_ms"] - md for t in sub]
-    k = len(present)
-    n_eff = max(4, len(rx) - (k - 1))          # 조건 평균 k개를 추정한 만큼 df 차감
-    r = pearson(rx, ry)
+    def partial_r(cells):
+        """cells: 턴 -> 그룹 키. 그룹 평균으로 중심화한 뒤 상관을 낸다."""
+        groups = defaultdict(list)
+        for t in kept:
+            groups[cells(t)].append(t)
+        gx, gy = [], []
+        used = 0
+        for g in groups.values():
+            if len(g) < 3:
+                continue
+            used += 1
+            mc = mean([t["user_input_chars"] for t in g])
+            md = mean([t["imposed_delay_ms"] for t in g])
+            gx += [t["user_input_chars"] - mc for t in g]
+            gy += [t["imposed_delay_ms"] - md for t in g]
+        n_eff = max(4, len(gx) - max(0, used - 1))
+        return pearson(gx, gy), n_eff, len(gx), used
+
+    # ★ 조건뿐 아니라 턴 위치도 통제한다.
+    #   참가자는 턴 위치에 따라 체계적으로 길게/짧게 쓸 수 있고(워밍업, 피로),
+    #   표본이 작으면 D의 난수 추출이 우연히 턴 위치와 정렬될 수 있다.
+    #   두 가지가 겹치면 조건만 통제한 부분상관에 허위 상관이 뜬다.
+    r, n_eff, n_used, n_cells = partial_r(lambda t: (t["condition"], t.get("turn_index")))
+    r_cond, n_eff_c, _, _ = partial_r(lambda t: t["condition"])
     lo, hi = fisher_ci(r, n_eff)
     inside = (not math.isnan(lo)) and lo > -equiv_bound and hi < equiv_bound
-    rep.say(f"  ★ 조건 내 부분상관:  r = {fmt(r, 3)}   95% CI [{fmt(lo, 3)}, {fmt(hi, 3)}]"
-            f"   N = {len(rx)} (조건 {k}개 통제)")
+    rep.say(f"  ★ 조건 × 턴 위치 통제 부분상관:  r = {fmt(r, 3)}"
+            f"   95% CI [{fmt(lo, 3)}, {fmt(hi, 3)}]   N = {n_used} ({n_cells}개 칸)")
+    lc, hc = fisher_ci(r_cond, n_eff_c)
+    rep.say(f"    (조건만 통제:  r = {fmt(r_cond, 3)}   95% CI [{fmt(lc, 3)}, {fmt(hc, 3)}])")
+    if not math.isnan(r) and not math.isnan(r_cond) and abs(r_cond) - abs(r) > 0.10:
+        rep.say("    ※ 턴 위치를 통제하면 상관이 크게 줄었다. 입력 길이가 턴 위치를")
+        rep.say("      따라 체계적으로 변한다는 뜻이다 — 조작 실패가 아니라 발화 패턴이다.")
     rep.data["within_condition_r"] = None if math.isnan(r) else round(r, 4)
+    rep.data["condition_only_r"] = None if math.isnan(r_cond) else round(r_cond, 4)
     rep.data["within_condition_ci"] = [None if math.isnan(lo) else round(lo, 4),
                                        None if math.isnan(hi) else round(hi, 4)]
 
@@ -292,10 +345,28 @@ def run(turns, equiv_bound):
     rep.say("          구현이 틀려도 0 근처로 나온다 — --demo-broken 으로 재현된다.")
     rep.data["overall_r_do_not_report"] = None if math.isnan(r_all) else round(r_all, 4)
 
-    rep.check(f"조건 내 부분상관 |r| < {equiv_bound}",
-              (not math.isnan(r)) and abs(r) < equiv_bound, f"r = {fmt(r, 3)}")
-    bad = [c for c, v in per_cond_r.items() if v is not None and abs(v) >= equiv_bound]
-    rep.check(f"모든 조건에서 |r| < {equiv_bound}", not bad,
+    # 조건별 검사와 같은 논리를 쓴다. |r| ≥ 한계만으로 실패시키면 표본이 작을 때
+    # 오경보가 난다 (N=60이면 SE ≈ .15). 신뢰구간이 0을 배제할 때만 실패로 본다.
+    pooled_noisy = math.isnan(lo) or (lo <= 0 <= hi)
+    pooled_bad = (not math.isnan(r)) and abs(r) >= equiv_bound and not pooled_noisy
+    rep.check(f"조건 × 턴 통제 부분상관 |r| < {equiv_bound} (95% CI가 0을 배제하는 경우만 실패)",
+              not pooled_bad,
+              f"r = {fmt(r, 3)}  CI [{fmt(lo, 3)}, {fmt(hi, 3)}]" if pooled_bad else
+              (f"r = {fmt(r, 3)}이지만 CI가 0을 포함 — 표본오차" if not math.isnan(r) and abs(r) >= equiv_bound
+               else f"r = {fmt(r, 3)}"))
+    # 조건별 n은 전체의 1/3이라 표본오차가 크다 (n=240이면 SE ≈ .065).
+    # |r| ≥ 한계만으로 실패시키면 우연히 튄 조건에서 오경보가 난다.
+    # 3개 조건을 보므로 99% CI를 쓰고, CI가 0을 배제할 때만 실패로 본다.
+    bad = []
+    for c, v in per_cond_r.items():
+        if v is None or abs(v) < equiv_bound:
+            continue
+        l3, h3 = fisher_ci(v, len(by_cond[c]), conf=0.99)
+        if not math.isnan(l3) and (l3 > 0 or h3 < 0):
+            bad.append(c)
+        else:
+            rep.say(f"    ({CONDITION_KO[c]} r = {fmt(v, 3)}는 한계를 넘지만 99% CI가 0을 포함 — 표본오차)")
+    rep.check(f"모든 조건에서 |r| < {equiv_bound} (99% CI가 0을 배제하는 경우만 실패)", not bad,
               f"초과: {', '.join(CONDITION_KO[c] + ' ' + fmt(per_cond_r[c], 3) for c in bad)}" if bad else "")
     need = required_n_for_ci(r, equiv_bound)
     detail = "" if inside else (
@@ -306,7 +377,7 @@ def run(turns, equiv_bound):
     if not inside:
         rep.say("    ※ D는 입력을 보기 전에 난수로 뽑히므로 모상관은 설계상 정확히 0이다.")
         rep.say("       이 검사는 등가성 '입증'이 아니라 구현 검증이다 — 계획서 §1 참조.")
-    if (not math.isnan(r) and abs(r) >= equiv_bound) or bad:
+    if pooled_bad or bad:
         rep.say()
         rep.say("  ⚠ 구현을 의심할 것 (계획서 §1):")
         rep.say("    1) D를 전송 직후에 뽑는가, LLM 응답 후에 뽑는가")
@@ -324,7 +395,7 @@ def run(turns, equiv_bound):
             continue
         d = [t["imposed_delay_ms"] for t in sub]
         e = [abs(t["display_error_ms"]) for t in sub]
-        lo_r, hi_r = TARGET_RANGE_MS[c]
+        lo_r, hi_r = ranges[c]
         out = [t for t in sub if not (lo_r - DISPLAY_TOLERANCE_MS <= t["target_delay_ms"] <= hi_r + DISPLAY_TOLERANCE_MS)]
         ok_range = ok_range and not out
         rep.say(f"  {CONDITION_KO[c]:<6}{len(sub):>5}{fmt(mean(d), 0) + ' (' + fmt(sd(d), 0) + ')':>24}"
@@ -352,14 +423,32 @@ def run(turns, equiv_bound):
     rep.data["overrun_pct"] = round(pct, 2)
 
     rep.say()
+    rep.say("  턴 번호별 LLM 생성 시간 (대화 이력이 쌓이면 늘어난다 — materials/04 §7)")
+    by_turn = defaultdict(list)
+    for t in kept:
+        if t.get("turn_index"):
+            by_turn[int(t["turn_index"])].append(t["llm_latency_ms"])
+    for ti in sorted(by_turn):
+        lat = by_turn[ti]
+        rep.say(f"    턴 {ti}  M {fmt(mean(lat), 0):>7}ms  max {max(lat):>7}ms  n {len(lat)}")
+    if len(by_turn) >= 2:
+        first, last = min(by_turn), max(by_turn)
+        growth = mean(by_turn[last]) - mean(by_turn[first])
+        rep.say(f"    턴 {first} → {last} 증가분: {fmt(growth, 0)}ms")
+        floor = min(ranges[c][0] for c in CONDITIONS if by_cond[c])
+        rep.check("마지막 턴 생성 시간이 가장 짧은 목표 지연 하한 미만",
+                  max(by_turn[last]) < floor,
+                  f"턴 {last} 최대 {max(by_turn[last])}ms vs 하한 {floor}ms")
+
+    rep.say()
     rep.say("  조건 실행 가능성 (LLM 생성 시간 분포 vs 목표 지연 하한)")
     all_lat = sorted(t["llm_latency_ms"] for t in kept)
     p95 = all_lat[min(len(all_lat) - 1, int(0.95 * len(all_lat)))]
     rep.say(f"    LLM 생성 시간 p50 {all_lat[len(all_lat)//2]}ms · p95 {p95}ms · max {all_lat[-1]}ms")
-    infeasible = [c for c in CONDITIONS if by_cond[c] and TARGET_RANGE_MS[c][0] < p95]
+    infeasible = [c for c in CONDITIONS if by_cond[c] and ranges[c][0] < p95]
     for c in CONDITIONS:
         if by_cond[c]:
-            floor = TARGET_RANGE_MS[c][0]
+            floor = ranges[c][0]
             mark = "✗" if floor < p95 else "✓"
             rep.say(f"    {mark} {CONDITION_KO[c]:<4} 하한 {floor}ms {'<' if floor < p95 else '≥'} p95 {p95}ms")
     rep.check("모든 조건의 목표 지연 하한 ≥ LLM 생성 p95", not infeasible,
@@ -381,9 +470,13 @@ def run(turns, equiv_bound):
     if len(lens) >= 2:
         ms = [mean(v) for v in lens.values()]
         pooled = mean([sd(v) for v in lens.values()])
-        spread = (max(ms) - min(ms)) / pooled if pooled else 0.0
-        rep.check("조건 간 평균 응답 길이 차 < 0.3 SD", spread < 0.3,
-                  f"최대차 {fmt(max(ms) - min(ms))}자 = {fmt(spread, 2)} SD")
+        raw = max(ms) - min(ms)
+        spread = raw / pooled if pooled else 0.0
+        # SD가 매우 작으면 표준화 차이가 과장된다. 원 단위로도 무시할 만하면 통과.
+        trivial = raw < 0.05 * mean(ms)
+        rep.check("조건 간 평균 응답 길이 차 < 0.3 SD", spread < 0.3 or trivial,
+                  f"최대차 {fmt(raw)}자 = {fmt(spread, 2)} SD"
+                  + ("  (원 단위로는 평균의 5% 미만 — 무시)" if trivial and spread >= 0.3 else ""))
 
     rng = random.Random(20260401)
     truncated = [t for t in kept if str(t.get("finish_reason", "")).lower() == "length"]
@@ -415,6 +508,33 @@ def run(turns, equiv_bound):
                   f"A↔B {fmt(cross, 3)} vs min(A,B) {fmt(min(wa, wb), 3)}")
         rep.data["similarity"] = {"within_a": wa, "within_b": wb, "cross": cross}
     rep.say("    ※ 논문 수치는 문장 임베딩 코사인 유사도로 다시 계산할 것")
+
+    rep.say()
+    rep.say("  ⑤ 프롬프트 규칙 위반 (금지어 포함 — 목표 0건)")
+    if response_rules is None:
+        rep.note("규칙 검사기 사용 가능", False, "prompts/response_rules.py를 불러오지 못했다")
+    else:
+        variant = next((t["empathy_variant"] for t in kept if t.get("empathy_variant")), "B")
+        viol = defaultdict(int)
+        bad_turns = 0
+        for t in kept:
+            vs = response_rules.check(t.get("ai_response_text", ""),
+                                      context=str(t.get("context", "a")),
+                                      empathy_variant=str(variant),
+                                      expect_safety=bool(t.get("safety_flag")))
+            if vs:
+                bad_turns += 1
+                for x in vs:
+                    viol[x["rule"]] += 1
+        rep.say(f"    맥락 B 공감 변형: {variant}")
+        if viol:
+            for rule, cnt in sorted(viol.items(), key=lambda kv: -kv[1]):
+                rep.say(f"    {rule:<20} {cnt:>5}건")
+        rep.check("프롬프트 규칙 위반 0건", bad_turns == 0,
+                  f"{bad_turns}/{len(kept)}턴에서 위반 — "
+                  f"자세히: python3 prompts/response_rules.py --jsonl <로그>" if bad_turns else "")
+        rep.data["rule_violation_turns"] = bad_turns
+        rep.data["rule_violations"] = dict(viol)
 
     rep.say()
     rep.say("  ④ 사용자 입력 길이 · 응답 지연 (조건 간 달라도 됨 — 결과일 수 있음)")
@@ -477,11 +597,20 @@ def make_demo(broken=False, seed=7):
                 lo, hi = TARGET_RANGE_MS[cond]
                 target = rng.randint(lo, hi)
                 req = submit + rng.randint(20, 60)
-                llm = 280 + chars * rng.randint(1, 3) + rng.randint(0, 220)
+                llm = 240 + chars * rng.randint(1, 2) + rng.randint(0, 150)
                 resp = req + llm
                 display = (resp + target) if broken else max(resp, submit + target)
                 nxt = display + rng.randint(1200, 4200) + (900 if cond == "long" else 0)
-                stem = ("어떤 장면이 그랬는지 " if ctx == "a" else "그러셨군요 어떤 점이 ")
+                stems = ([
+                    "말씀하신 그 장면이 인상적이셨군요. ",
+                    "그 부분을 재미있게 보셨군요. 비슷한 작품을 찾으시는 편인지도 궁금한 대목입니다. ",
+                    "그렇게 보셨군요. 보시는 동안 특히 눈에 들어온 부분이 있으셨을 것 같습니다. ",
+                ] if ctx == "a" else [
+                    "그러셨군요. ",
+                    "그런 상황이셨네요. 그 일이 계속 신경 쓰이는 상태로 지내셨을 것 같습니다. ",
+                    "쉽지 않으셨겠어요. 말씀을 들어보니 정리가 잘 안 되는 상황으로 보입니다. ",
+                ])
+                stem = rng.choice(stems)
                 out.append({
                     "participant_id": pid, "group": "adhd" if p % 2 else "comparison",
                     "block": 1 if ctx == "a" else 2, "conversation_index": conv,
@@ -490,12 +619,13 @@ def make_demo(broken=False, seed=7):
                     "user_input_text": "가" * chars, "user_input_chars": chars,
                     "target_delay_ms": target,
                     "llm_request_ts": req, "llm_response_ts": resp, "display_ts": display,
-                    "ai_response_text": stem + "".join(rng.choice("가나다라마바사아자차") for _ in range(60)),
-                    "ai_response_chars": 60 + len(stem),
+                    "ai_response_text": stem + "어떤 부분이 제일 걸리셨나요?",
+                    "ai_response_chars": len(stem) + 17,
                     "next_input_start_ts": nxt if turn < 5 else None,
                     "finish_reason": "stop",
                     "safety_flag": False, "manipulation_ok": resp <= submit + target,
-                    "prompt_version": "v0.1", "prompt_sha256": sha[ctx],
+                    "prompt_version": "v0.2", "prompt_sha256": sha[ctx],
+                    "empathy_variant": "B",
                     "model": "demo-model", "temperature": 0.3, "max_tokens": 300,
                 })
                 now = nxt + rng.randint(500, 1500)
