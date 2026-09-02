@@ -11,7 +11,7 @@
   --surface-2: #ebebe7;
   --ink:       #17181a;
   --ink-2:     #4a4d52;
-  --ink-3:     #6b6f75;
+  --ink-3:     #5f6369;   /* 4.5:1 확보 — 옅은 배경 위에서도 */
   --line:      #d3d4d0;
   --line-2:    #babcb7;
   --accent:    #2c4250;
@@ -465,7 +465,7 @@ fieldset.q legend {
 }
 .tick:hover { background: var(--surface-2); }
 .tick input { width: 20px; height: 20px; margin: 0; }
-.tick span { font-size: 14px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.tick span { font-size: 15px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 
 /* ---------- 안전 오버레이 ---------- */
 
