@@ -81,7 +81,7 @@
         <div class="panel">
           <ul class="plain">
             <li>오늘 하실 일은 AI 챗봇과 여섯 번의 짧은 대화를 나누는 것입니다.</li>
-            <li>대화가 하나 끝날 때마다 네 항목의 짧은 설문에 답해 주시면 됩니다.</li>
+            <li>대화가 하나 끝날 때마다 세 항목의 짧은 질문에 답해 주시면 됩니다.</li>
             <li>대화가 모두 끝나면 40분 정도 이야기를 나누는 시간을 갖습니다. 이 부분은 녹음됩니다.</li>
             <li>언제든 “그만하겠습니다”라고 하시면 바로 멈춥니다. 불이익은 없고 사례비는 그대로 드립니다.</li>
           </ul>
@@ -123,7 +123,7 @@
           <ol class="sheet-list">
             <li>AI 챗봇과 여섯 번의 짧은 대화를 나눕니다.</li>
             <li>대화 하나는 다섯 번 주고받으면 마무리됩니다.</li>
-            <li>대화가 끝날 때마다 네 항목의 짧은 설문에 답합니다.</li>
+            <li>대화가 끝날 때마다 세 항목의 짧은 질문에 답합니다.</li>
             <li>모든 대화가 끝나면 40분 정도 이야기를 나눕니다. (녹음)</li>
           </ol>
           <ul class="sheet-dots">
@@ -160,7 +160,7 @@
       <div class="col">
         <h1>주제 안내</h1>
         <div class="topic-card" id="topic-card">
-          <p class="topic-card-title">대화 주제</p>
+          <p class="topic-card-title" id="topic-card-title">이번에는 이런 이야기를 해 주세요</p>
           <div class="topic-card-body" id="topic-card-body"></div>
         </div>
         <button type="button" class="btn btn-primary" data-primary data-action="next">시작</button>
@@ -198,17 +198,17 @@
       </div>
     </section>
 
-    <!-- ---------- 조건별 설문 (materials/05) ---------- -->
+    <!-- ---------- 대화 직후 문항 · 3개 · 6회 (명세서 §1) ---------- -->
     <section class="screen" data-screen="survey">
       <div class="col">
         <h1>방금 대화에 대한 질문</h1>
-        <p class="lead">네 항목입니다. 답한 뒤에는 되돌아갈 수 없으니 확인하고 제출해 주세요.</p>
+        <p class="lead">세 항목입니다. 답한 뒤에는 되돌아갈 수 없으니 확인하고 제출해 주세요.</p>
 
         <form id="survey-form" novalidate>
 
           <fieldset class="q">
             <legend>①</legend>
-            <p class="q-text">방금 대화에서, 메시지를 보낸 뒤 상대의 답이 화면에 나타나기까지 평균 몇 초쯤 걸렸다고 느끼셨나요?</p>
+            <p class="q-text">방금 대화에서, 메시지를 보낸 뒤 AI의 답이 화면에 나타나기까지 대체로 몇 초쯤 걸렸다고 느끼셨나요?</p>
             <div class="q-inline">
               <span>약</span>
               <label class="sr-only" for="q-time">초</label>
@@ -226,23 +226,9 @@
 
           <fieldset class="q">
             <legend>③</legend>
-            <p class="q-text">방금 대화 상대에 대해 어떻게 느끼셨는지 표시해 주세요.</p>
-            <p class="placeholder-note">
-              ⚠ 아래 네 문항은 <strong>자리표시자</strong>입니다.
-              PETS(Schmidmaier et al., CHI 2024) 원척도 문항으로 교체한 뒤 본 실험을 시작합니다.
-            </p>
-            <div id="q-pets"></div>
-          </fieldset>
-
-          <fieldset class="q">
-            <legend>④</legend>
-            <p class="q-text">방금 대화 상대에 대한 인상을 표시해 주세요.</p>
-            <div id="q-godspeed"></div>
-            <div class="pilot-box">
-              <p class="pilot-label">파일럿 판단 항목</p>
-              <p class="pilot-note">아래 한 쌍은 원척도의 다섯 번째 문항입니다. 판단이 어려우시면 비워 두셔도 됩니다.</p>
-              <div id="q-godspeed5"></div>
-            </div>
+            <label class="q-text" for="q-word">방금 대화를 한 단어로 표현한다면 무엇인가요?</label>
+            <input type="text" id="q-word" maxlength="30" autocomplete="off" spellcheck="false">
+            <p class="q-sub">떠오르는 대로 적어 주세요. 어떤 단어든 괜찮습니다.</p>
           </fieldset>
 
           <p class="error" id="survey-error" hidden></p>
@@ -251,21 +237,37 @@
       </div>
     </section>
 
-    <!-- ---------- 정서적 관여 확인 (materials/06) ---------- -->
+    <!-- ---------- 블록 종료 문항 · 2회 (명세서 §2) ---------- -->
     <section class="screen" data-screen="engagement">
       <div class="col">
-        <h1>방금 세 번의 대화에 대한 질문</h1>
-        <p class="lead">방금 세 번의 대화를 전체적으로 떠올리며 답해 주세요.</p>
+        <h1 id="block-end-title">방금 나눈 이야기에 대해</h1>
+        <p class="lead" id="block-end-lead">정답이 없는 질문입니다. 편하게 답해 주세요.</p>
 
         <form id="engagement-form" novalidate>
-          <div id="q-engagement"></div>
 
           <fieldset class="q">
-            <legend>자유 기입</legend>
-            <label class="q-text" for="q-free">어떤 이야기를 하셨는지 한 문장으로 적어 주세요.<br>
-              <span class="q-sub">(구체적인 내용을 쓰지 않으셔도 됩니다.)</span></label>
-            <textarea id="q-free" rows="2" autocomplete="off" spellcheck="false"></textarea>
+            <legend>가</legend>
+            <p class="q-text">방금 대화한 AI에 대해 어떻게 느끼셨는지 표시해 주세요.</p>
+            <p class="placeholder-note">
+              ⚠ 아래 네 문항은 <strong>자리표시자</strong>입니다.
+              PETS(Schmidmaier et al., CHI 2024) 원척도 문항으로 교체한 뒤 본 실험을 시작합니다.
+            </p>
+            <div id="q-pets"></div>
           </fieldset>
+
+          <fieldset class="q">
+            <legend>나</legend>
+            <p class="q-text">방금 대화한 AI에 대한 인상을 표시해 주세요.</p>
+            <div id="q-godspeed"></div>
+          </fieldset>
+
+          <!-- 관여 지수 — 고민 상담 블록에만 (명세서 §2-2) -->
+          <div id="engagement-block" hidden>
+            <fieldset class="q">
+              <legend>다</legend>
+              <div id="q-engagement"></div>
+            </fieldset>
+          </div>
 
           <p class="error" id="engagement-error" hidden></p>
           <button type="submit" class="btn btn-primary" data-primary>제출</button>
@@ -276,9 +278,9 @@
     <!-- ---------- 휴식 ---------- -->
     <section class="screen" data-screen="break">
       <div class="col">
-        <h1>쉬어 가는 시간</h1>
+        <h1>잠시 다른 활동을 하겠습니다</h1>
         <div class="panel">
-          <p>여기까지 절반이 끝났습니다. 3분 정도 쉬어 가겠습니다.</p>
+          <p>여기까지 절반이 끝났습니다. 3분 정도 다른 활동을 하겠습니다.</p>
           <p>자리에서 편하게 계시면 되고, 연구자가 안내하면 아래 버튼을 눌러 주세요.</p>
         </div>
         <button type="button" class="btn btn-primary" data-primary data-action="next">계속하기</button>

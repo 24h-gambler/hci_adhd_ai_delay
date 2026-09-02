@@ -41,7 +41,9 @@
   }
 
   var OPT = {
-    indicator: pick(params.get('indicator'), ['none', 'dots', 'typing'], 'dots'),
+    // 명세서 §4 — 아무것도 표시하지 않는다. 점 세 개는 그 자체가 사회적
+    // 단서이며 지연 효과와 섞인다. 기본값을 바꾸지 말 것.
+    indicator: pick(params.get('indicator'), ['none', 'dots', 'typing'], 'none'),
     progress: params.get('progress') !== '0',
     e2e: params.get('e2e') === '1',
     researcher: params.get('researcher') === '1' || /\/researcher\/?$/.test(location.pathname)
@@ -119,6 +121,7 @@
     safetyEvents: [],
     surveyShownTs: null,
     lastSubmit: Promise.resolve(),
+    endAutoTimer: null,
     endPending: false,
     doneReached: false
   };
@@ -130,14 +133,19 @@
         ※ "속도 / 빠름 / 느림 / 지연 / 기다림" 계열 단어는 절대 쓰지 않는다.
      ========================================================== */
 
+  var TOPIC_CARD_TITLE = '이번에는 이런 이야기를 해 주세요';
+
   var TOPIC_CARD = {
     a: [
-      '최근에 보신 영화, 드라마, 영상 같은\n콘텐츠에 대해 이야기해보세요.',
+      '최근에 보신 영화, 드라마, 영상 같은\n콘텐츠에 대해 이야기해 주세요.',
       '무엇이든 편하게 말씀하시면 됩니다.',
       '5번 주고받으면 이 대화는 마무리됩니다.'
     ],
+    // 명세서 §3 — 관여는 AI의 말투가 아니라 참가자 자신의 주제에서 나와야 한다.
+    // 그래서 "실제"를 두 번 강조한다. 이 줄을 빼면 안 된다.
     b: [
-      '요즘 신경 쓰이거나 마음에 걸리는 일에 대해\n이야기해보세요.',
+      '요즘 실제로 신경 쓰이거나 마음에 걸리는 일에 대해\n이야기해 주세요.',
+      '지어낸 이야기가 아니라 실제 고민일 때\n연구에 도움이 됩니다.',
       '말씀하고 싶은 만큼만 하시면 되고,\n불편하시면 언제든 멈추실 수 있습니다.',
       '5번 주고받으면 이 대화는 마무리됩니다.'
     ]
@@ -151,10 +159,10 @@
   var PRACTICE_NOTE = '연습입니다. 아무 말이나 한 문장 입력하고 보내 보세요.';
 
   var PETS_ITEMS = [
-    '〔자리표시자 ③-1〕 PETS 이해·신뢰 요인 1번 문항 — 원척도 문항으로 교체 예정',
-    '〔자리표시자 ③-2〕 PETS 이해·신뢰 요인 2번 문항 — 원척도 문항으로 교체 예정',
-    '〔자리표시자 ③-3〕 PETS 정서적 조응 요인 1번 문항 — 원척도 문항으로 교체 예정',
-    '〔자리표시자 ③-4〕 PETS 정서적 조응 요인 2번 문항 — 원척도 문항으로 교체 예정'
+    '〔자리표시자 가-1〕 PETS 이해·신뢰 요인 1번 문항 — 원척도 문항으로 교체 예정',
+    '〔자리표시자 가-2〕 PETS 이해·신뢰 요인 2번 문항 — 원척도 문항으로 교체 예정',
+    '〔자리표시자 가-3〕 PETS 정서적 조응 요인 1번 문항 — 원척도 문항으로 교체 예정',
+    '〔자리표시자 가-4〕 PETS 정서적 조응 요인 2번 문항 — 원척도 문항으로 교체 예정'
   ];
 
   var GODSPEED_PAIRS = [
@@ -165,16 +173,17 @@
     ['뻣뻣하게 움직이는', '우아하게 움직이는']   // 5번째 = 파일럿 판단 항목
   ];
 
-  var ENGAGEMENT_ITEMS = {
-    a: '실제로 최근에 본 콘텐츠에 대해 이야기했다',
-    b: '실제로 요즘 신경 쓰이는 일에 대해 이야기했다',
-    rest: [
-      '이야기한 내용은 나에게 개인적으로 중요한 일이었다',
-      '이야기하면서 감정이 움직였다',
-      '평소에 남에게 잘 하지 않는 이야기를 했다',
-      '대화에 집중하고 있었다'
-    ]
-  };
+  // 명세서 §2-2 — 고민 상담 블록에만. 1~5점. ④는 역방향이며 채점 시 반전한다.
+  var ENGAGEMENT_ITEMS = [
+    { key: 'engagement_1', text: '방금 이야기한 내용은 실제로 요즘 신경 쓰이는 일이었나요?',
+      left: '전혀 아니다', right: '실제 고민이었다' },
+    { key: 'engagement_2', text: '그 일이 요즘 얼마나 신경 쓰이나요?',
+      left: '전혀 신경 쓰이지 않는다', right: '매우 신경 쓰인다' },
+    { key: 'engagement_3', text: '이야기하는 동안 그 일에 대해 얼마나 집중하셨나요?',
+      left: '전혀 집중하지 않았다', right: '매우 집중했다' },
+    { key: 'engagement_4', text: '평소에 이 이야기를 다른 사람에게 하시는 편인가요?',
+      left: '자주 한다', right: '거의 하지 않는다', reverse: true }
+  ];
 
   /* ==========================================================
      6. 화면 전환
@@ -187,6 +196,8 @@
   }
 
   function showScreen(logical) {
+    // 대화 종료 자동 전환 타이머가 다음 화면으로 새지 않게 한다
+    if (State.endAutoTimer) { clearTimeout(State.endAutoTimer); State.endAutoTimer = null; }
     var target = sectionName(logical);
     var list = document.querySelectorAll('.screen');
     for (var i = 0; i < list.length; i++) {
@@ -328,6 +339,7 @@
   function renderCard(ctx) {
     var body = D.topicCardBody;
     clear(body);
+    if (D.topicCardTitle) { D.topicCardTitle.textContent = TOPIC_CARD_TITLE; }
     (TOPIC_CARD[ctx] || TOPIC_CARD.a).forEach(function (para) {
       var p = el('p', null, para);
       body.appendChild(p);
@@ -353,7 +365,9 @@
     D.chatTopic.textContent = isPractice ? '연습' : (TOPIC_LINE[conv.context] || '');
     D.chatNote.textContent = isPractice ? PRACTICE_NOTE : '';
     D.chatNote.hidden = !isPractice;
+    if (State.endAutoTimer) { clearTimeout(State.endAutoTimer); State.endAutoTimer = null; }
     D.endPanel.hidden = true;
+    D.btnEndNext.hidden = false;
     D.composer.hidden = false;
     D.chatInput.value = '';
     setComposerEnabled(true);
@@ -601,8 +615,13 @@
         D.endText.textContent = '연습이 끝났습니다.';
         D.btnEndNext.textContent = '다음';
       } else {
-        D.endText.textContent = '이 대화는 마무리되었습니다.';
-        D.btnEndNext.textContent = '설문으로';
+        // 명세서 §4 — 갑자기 바뀌면 대화의 여운이 끊긴다. 2초 표시 후 자동 전환.
+        D.endText.textContent = '이번 대화가 끝났습니다.';
+        D.btnEndNext.hidden = true;
+        State.endAutoTimer = setTimeout(function () {
+          D.btnEndNext.hidden = false;
+          if (State.screen === 'chat') { nextStep(); }
+        }, 2000);
       }
     } else {
       setComposerEnabled(true);
@@ -705,27 +724,6 @@
       text: '', min: 1, max: 7,
       left: '전혀 불편하지 않았다', right: '매우 불편했다'
     });
-
-    clear(D.qPets);
-    PETS_ITEMS.forEach(function (t, i) {
-      scaleRow(D.qPets, 'pets_' + (i + 1), {
-        text: t, min: 1, max: 7,
-        left: '전혀 그렇지 않다', right: '매우 그렇다'
-      });
-    });
-
-    clear(D.qGodspeed);
-    GODSPEED_PAIRS.slice(0, 4).forEach(function (pair, i) {
-      scaleRow(D.qGodspeed, 'godspeed_' + (i + 1), {
-        text: '', min: 1, max: 5, left: pair[0], right: pair[1]
-      });
-    });
-
-    clear(D.qGodspeed5);
-    scaleRow(D.qGodspeed5, 'godspeed_5', {
-      text: '', min: 1, max: 5,
-      left: GODSPEED_PAIRS[4][0], right: GODSPEED_PAIRS[4][1]
-    });
   }
 
   function resetSurveyForm() {
@@ -733,6 +731,7 @@
     D.qTime.value = '';
     D.qTime.disabled = false;
     D.qTimeUnknown.checked = false;
+    if (D.qWord) { D.qWord.value = ''; }
     D.surveyError.hidden = true;
   }
 
@@ -750,12 +749,7 @@
     if (!unknown && raw === '') { missing.push('①'); }
     if (!unknown && raw !== '' && (!isFinite(Number(raw)) || Number(raw) < 0)) { missing.push('①'); }
     if (radioValue('discomfort') == null) { missing.push('②'); }
-    for (var i = 1; i <= 4; i++) {
-      if (radioValue('pets_' + i) == null) { missing.push('③-' + i); }
-    }
-    for (var j = 1; j <= 4; j++) {
-      if (radioValue('godspeed_' + j) == null) { missing.push('④-' + j); }
-    }
+    if (!(D.qWord && D.qWord.value.trim())) { missing.push('③'); }
 
     if (missing.length) {
       D.surveyError.textContent = '아직 답하지 않은 항목이 있습니다: ' + missing.join(', ');
@@ -768,15 +762,7 @@
       time_estimate_sec: unknown ? null : Number(raw),
       time_estimate_unknown: unknown,
       discomfort: radioValue('discomfort'),
-      pets_1: radioValue('pets_1'),
-      pets_2: radioValue('pets_2'),
-      pets_3: radioValue('pets_3'),
-      pets_4: radioValue('pets_4'),
-      godspeed_1: radioValue('godspeed_1'),
-      godspeed_2: radioValue('godspeed_2'),
-      godspeed_3: radioValue('godspeed_3'),
-      godspeed_4: radioValue('godspeed_4'),
-      godspeed_5: radioValue('godspeed_5'),
+      one_word: D.qWord ? D.qWord.value.trim() : '',
       block: State.block,
       condition: State.condition,
       context: State.context
@@ -786,16 +772,35 @@
   }
 
   function buildEngagementForm(ctx) {
-    clear(D.qEngagement);
-    var first = ENGAGEMENT_ITEMS[ctx] || ENGAGEMENT_ITEMS.a;
-    var items = [first].concat(ENGAGEMENT_ITEMS.rest);
-    items.forEach(function (t, i) {
-      scaleRow(D.qEngagement, 'engagement_' + (i + 1), {
-        text: (i + 1) + '. ' + t, min: 1, max: 7,
-        left: '전혀 아니다', right: '매우 그렇다'
+    // 명세서 §2 — 블록 종료 문항. PETS·Godspeed는 두 블록 모두,
+    // 관여 지수는 고민 상담 블록(b)에만.
+    clear(D.qPets);
+    PETS_ITEMS.forEach(function (t, i) {
+      scaleRow(D.qPets, 'pets_' + (i + 1), {
+        text: t, min: 1, max: 7,
+        left: '전혀 그렇지 않다', right: '매우 그렇다'
       });
     });
-    D.qFree.value = '';
+
+    clear(D.qGodspeed);
+    // Holmberg와 같은 척도·같은 점수 범위(1~5)를 쓴다. 5문항 모두 유지한다.
+    GODSPEED_PAIRS.forEach(function (pair, i) {
+      scaleRow(D.qGodspeed, 'godspeed_' + (i + 1), {
+        text: '', min: 1, max: 5, left: pair[0], right: pair[1]
+      });
+    });
+
+    var wantEngagement = (ctx === 'b');
+    if (D.engagementBlock) { D.engagementBlock.hidden = !wantEngagement; }
+    clear(D.qEngagement);
+    if (wantEngagement) {
+      ENGAGEMENT_ITEMS.forEach(function (it, i) {
+        scaleRow(D.qEngagement, it.key, {
+          text: '\u2460\u2461\u2462\u2463'.charAt(i) + ' ' + it.text,
+          min: 1, max: 5, left: it.left, right: it.right
+        });
+      });
+    }
     D.engagementError.hidden = true;
   }
 
@@ -806,29 +811,45 @@
   }
 
   function submitEngagement() {
-    var missing = [];
-    for (var i = 1; i <= 5; i++) {
-      if (radioValue('engagement_' + i) == null) { missing.push(String(i)); }
+    var wantEngagement = (State.context === 'b');
+    var missing = [], i;
+    for (i = 1; i <= 4; i++) {
+      if (radioValue('pets_' + i) == null) { missing.push('가-' + i); }
+    }
+    for (i = 1; i <= 5; i++) {
+      if (radioValue('godspeed_' + i) == null) { missing.push('나-' + i); }
+    }
+    if (wantEngagement) {
+      ENGAGEMENT_ITEMS.forEach(function (it, k) {
+        if (radioValue(it.key) == null) { missing.push('다-' + (k + 1)); }
+      });
     }
     if (missing.length) {
-      D.engagementError.textContent = '아직 답하지 않은 항목이 있습니다: ' + missing.join(', ') + '번';
+      D.engagementError.textContent = '아직 답하지 않은 항목이 있습니다: ' + missing.join(', ');
       D.engagementError.hidden = false;
       return Promise.resolve(false);
     }
     D.engagementError.hidden = true;
 
     var responses = {
-      engagement_1: radioValue('engagement_1'),
-      engagement_2: radioValue('engagement_2'),
-      engagement_3: radioValue('engagement_3'),
-      engagement_4: radioValue('engagement_4'),
-      engagement_5: radioValue('engagement_5'),
-      engagement_freetext: (D.qFree.value || '').trim(),
       block: State.block,
       context: State.context
     };
+    for (i = 1; i <= 4; i++) { responses['pets_' + i] = radioValue('pets_' + i); }
+    for (i = 1; i <= 5; i++) { responses['godspeed_' + i] = radioValue('godspeed_' + i); }
+    if (wantEngagement) {
+      ENGAGEMENT_ITEMS.forEach(function (it) { responses[it.key] = radioValue(it.key); });
+      // ④는 역방향 문항이다. 반전값을 함께 남겨 분석에서 다시 뒤집지 않게 한다.
+      var raw4 = radioValue('engagement_4');
+      responses.engagement_4_reversed = (raw4 == null) ? null : (6 - raw4);
+      var vals = [responses.engagement_1, responses.engagement_2,
+                  responses.engagement_3, responses.engagement_4_reversed];
+      responses.engagement_index =
+        vals.some(function (v) { return v == null; }) ? null
+          : Math.round((vals.reduce(function (a, b) { return a + b; }, 0) / 4) * 100) / 100;
+    }
 
-    return sendSurvey('engagement', responses);
+    return sendSurvey('block_end', responses);
   }
 
   function sendSurvey(kind, responses) {
@@ -1174,6 +1195,9 @@
       },
 
       advance: function () {
+        // 명세서 §4 — 대화 종료는 2초 뒤 자동 전환이라 누를 버튼이 없다.
+        // 곧 화면이 바뀌므로 성공으로 본다.
+        if (State.endAutoTimer) { return true; }
         var b = primaryButton();
         if (!b) { return false; }
         b.click();
@@ -1185,15 +1209,17 @@
           D.qTime.value = '8';
           D.qTime.dispatchEvent(new Event('input', { bubbles: true }));
           checkRadio('discomfort', 4);
-          for (var i = 1; i <= 4; i++) { checkRadio('pets_' + i, 4); }
-          for (var j = 1; j <= 5; j++) { checkRadio('godspeed_' + j, 3); }
+          D.qWord.value = '차분';
+          D.qWord.dispatchEvent(new Event('input', { bubbles: true }));
           D.surveyForm.querySelector('[data-primary]').click();
           return State.lastSubmit;
         }
         if (State.screen === 'engagement') {
-          for (var k = 1; k <= 5; k++) { checkRadio('engagement_' + k, 4); }
-          D.qFree.value = '자동 점검용 응답입니다.';
-          D.qFree.dispatchEvent(new Event('input', { bubbles: true }));
+          for (var i = 1; i <= 4; i++) { checkRadio('pets_' + i, 4); }
+          for (var j = 1; j <= 5; j++) { checkRadio('godspeed_' + j, 3); }
+          if (State.context === 'b') {
+            ENGAGEMENT_ITEMS.forEach(function (it) { checkRadio(it.key, 4); });
+          }
           D.engagementForm.querySelector('[data-primary]').click();
           return State.lastSubmit;
         }
@@ -1246,6 +1272,7 @@
     D.btnStart = $('btn-start');
 
     // 카드
+    D.topicCardTitle = $('topic-card-title');
     D.topicCardBody = $('topic-card-body');
 
     // 대화
@@ -1269,12 +1296,12 @@
     D.qDiscomfort = $('q-discomfort');
     D.qPets = $('q-pets');
     D.qGodspeed = $('q-godspeed');
-    D.qGodspeed5 = $('q-godspeed5');
     D.surveyError = $('survey-error');
 
     D.engagementForm = $('engagement-form');
     D.qEngagement = $('q-engagement');
-    D.qFree = $('q-free');
+    D.qWord = $('q-word');
+    D.engagementBlock = $('engagement-block');
     D.engagementError = $('engagement-error');
 
     // 안전
