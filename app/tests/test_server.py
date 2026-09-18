@@ -19,6 +19,7 @@
 
 import ast
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -770,10 +771,10 @@ class ServerlessRoutingTest(ServerCase):
     """
 
     def test_original_path_is_restored_from_query(self):
-        self.assertEqual(json.loads(self.get("/api/index?__p=%2Fapi%2Fhealth")), {"ok": True})
+        self.assertIs(json.loads(self.get("/api/index?__p=%2Fapi%2Fhealth"))["ok"], True)
 
     def test_local_path_still_routes(self):
-        self.assertEqual(json.loads(self.get("/api/health")), {"ok": True})
+        self.assertIs(json.loads(self.get("/api/health"))["ok"], True)
 
     def test_unknown_api_path_is_not_masked_by_html(self):
         # ★ 200 + HTML 로 덮이면 배포가 멀쩡해 보인다. 404 + JSON 이어야 한다.
@@ -803,6 +804,101 @@ class ServerlessRoutingTest(ServerCase):
         self.assertEqual(methods, {"log_message"},
                          "진입 파일이 다시 로직을 갖고 있다. 빌드 캐시에 얼어붙으면 "
                          "이 수정은 배포되지 않는다 — app/server.py 로 옮겨라: %s" % methods)
+
+
+
+class ExpFallbackTest(unittest.TestCase):
+    """exp 를 매달지 않은 채 Handler 를 그대로 띄운다 — 서버리스 재현.
+
+    배경 — 프로덕션에서 /api/health 는 200 인데 /api/session/start 는 전부
+    500 이었다. 진입 파일(api/index.py)이 클래스 속성으로 매다는 exp 가
+    Vercel 에서 먹히지 않아 self.exp 가 None 이었고, exp 를 건드리지 않는
+    경로(화면·정적 파일·health)만 멀쩡해 보여서 배포가 정상으로 읽혔다.
+
+    그래서 두 가지를 검사한다.
+      · exp 없이도 서버가 스스로 서서 실험 경로가 동작하는가
+      · /api/health 가 그 사실(bound / fallback)을 실제로 보고하는가
+    """
+
+    def setUp(self):
+        from http.server import ThreadingHTTPServer
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prev = os.environ.get("HCI_LOG_DIR")
+        os.environ["HCI_LOG_DIR"] = tmp.name
+        srv._FALLBACK_EXP = None
+
+        def restore():
+            srv._FALLBACK_EXP = None
+            if prev is None:
+                os.environ.pop("HCI_LOG_DIR", None)
+            else:
+                os.environ["HCI_LOG_DIR"] = prev
+
+        self.addCleanup(restore)
+
+        # ★ exp 를 매달지 않는다. 서버 객체에 verbose 도 없다 — 서버리스와 같은 조건.
+        self.assertIsNone(srv.Handler.exp, "기반 클래스는 exp 가 비어 있어야 재현이 된다")
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
+        t = threading.Thread(target=self.httpd.serve_forever,
+                             kwargs={"poll_interval": 0.02}, daemon=True)
+        t.start()
+
+        def stop():
+            self.httpd.shutdown()
+            t.join(timeout=5)
+            self.httpd.server_close()
+
+        self.addCleanup(stop)
+        self.base = "http://127.0.0.1:%d" % self.httpd.server_address[1]
+
+    def _req(self, path, body=None, expect=200):
+        req = urllib.request.Request(
+            self.base + path, method="POST" if body is not None else "GET",
+            data=json.dumps(body).encode("utf-8") if body is not None else None,
+            headers={"Content-Type": "application/json"} if body is not None else {})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                status, raw = r.status, r.read()
+        except urllib.error.HTTPError as e:
+            status, raw = e.code, e.read()
+        self.assertEqual(status, expect, raw[:400])
+        return json.loads(raw)
+
+    def test_health_reports_that_it_is_usable(self):
+        body = self._req("/api/health")
+        self.assertIs(body["ok"], True)
+        self.assertEqual(body["exp"], "fallback")
+        self.assertEqual(body["server_build"], srv.SERVER_BUILD)
+
+    def test_session_start_works_without_a_bound_exp(self):
+        # ★ 이것이 프로덕션에서 500 이던 바로 그 경로다.
+        s = self._req("/api/session/start",
+                      {"participant_id": "P07", "group": "adhd"})
+        self.assertEqual(len(s["condition_order"]), 3)
+        self.assertEqual(s["turns_per_conversation"], 9)
+
+    def test_plan_route_does_not_crash_without_a_bound_exp(self):
+        # 모르는 세션이면 404 여야 한다. AttributeError 가 새어 나가면
+        # Vercel 이 FUNCTION_INVOCATION_FAILED 로 덮어 원인이 사라진다.
+        self._req("/api/session/NOPE/plan", expect=404)
+
+    def test_bound_exp_is_reported_as_bound(self):
+        httpd = srv.build_server(port=0, provider="mock", log_dir=None,
+                                 latency_mode="fixed", delay_scale=TEST_SCALE)
+        t = threading.Thread(target=httpd.serve_forever,
+                             kwargs={"poll_interval": 0.02}, daemon=True)
+        t.start()
+        try:
+            base = "http://127.0.0.1:%d" % httpd.server_address[1]
+            with urllib.request.urlopen(base + "/api/health", timeout=30) as r:
+                body = json.loads(r.read())
+            self.assertEqual(body["exp"], "bound")
+        finally:
+            httpd.shutdown()
+            t.join(timeout=5)
+            httpd.server_close()
 
 
 
