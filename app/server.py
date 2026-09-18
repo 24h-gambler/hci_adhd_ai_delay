@@ -46,18 +46,18 @@ class Experiment:
         self.provider = provider
         self.store = store
         self.delay_scale = float(delay_scale)
-        self.ranges = cfgmod.scaled_delay_conditions(cfg, self.delay_scale)
-        self.variant = cfg["empathy_variant"]
+        self.placement = cfgmod.scaled_delay_placement(cfg, self.delay_scale)
         self.turns_per_conversation = int(cfg["conversation"]["turns_per_conversation"])
+        self.conversations = int(cfg["conversation"]["conversations"])
         self.reset_history = bool(
             cfg["conversation"].get("reset_history_between_conversations", True))
         self._lock = threading.Lock()
         self._sessions: dict[str, dict] = {}
-        self._prompts = {
-            "a": build_prompts.build("context_a"),
-            "b": build_prompts.build(f"context_b_{self.variant}"),
-        }
-        self._hashes = {k: build_prompts.sha256(v) for k, v in self._prompts.items()}
+        # 기반은 R1/R2/R3에서 완전히 동일하다. 턴마다 깊이 지시만 덧붙는다.
+        self._base = build_prompts.build("base")
+        self._base_hash = build_prompts.sha256(self._base)
+        self._system = {d: build_prompts.system_for(d) for d in sched.DEPTHS}
+        self._system_hash = {d: build_prompts.sha256(v) for d, v in self._system.items()}
 
     # ── 세션 ──
     def start_session(self, participant_id: str, group: str) -> dict:
@@ -76,23 +76,22 @@ class Experiment:
         return {
             "session_id": sid,
             "participant_number": plan["participant_number"],
-            "block_order": plan["block_order"],
+            "condition_order": plan["condition_order"],
             "conversations": plan["conversations"],
             "turns_per_conversation": self.turns_per_conversation,
-            "empathy_variant": self.variant,
             "prompt_version": self.cfg["version"],
-            "prompt_sha256": dict(self._hashes),
+            "base_prompt_sha256": self._base_hash,
             "model": self.provider.model,
             "temperature": m.get("temperature"),
             "max_tokens": m.get("max_tokens"),
             "delay_scale": self.delay_scale,
-            "delay_conditions": self.ranges,
+            "delay_placement": self.placement,
+            "indicator": self.cfg.get("indicator", "none"),
         }
 
     def _conversation_meta(self, sess: dict, conv_index: int) -> dict:
         if int(conv_index) == sched.PRACTICE_CONVERSATION_INDEX:
-            first_ctx = sess["plan"]["block_order"][0]
-            return {"index": 0, "block": 0, "context": first_ctx, "condition": "practice"}
+            return {"index": 0, "condition": "practice"}
         for c in sess["plan"]["conversations"]:
             if c["index"] == int(conv_index):
                 return c
@@ -114,8 +113,9 @@ class Experiment:
         meta = self._conversation_meta(sess, conv)
         practice = conv == sched.PRACTICE_CONVERSATION_INDEX
 
-        # ★ D는 텍스트를 보지 않고 (세션, 대화, 턴)만으로 뽑는다 (CONTRACT P1).
-        target = sched.draw_delay_ms(sid, conv, turn_index, meta["condition"], self.ranges)
+        # ★ 깊이와 D를 텍스트를 보지 않고 (세션, 대화, 턴)만으로 정한다 (CONTRACT P1).
+        tp = sched.turn_plan(sid, conv, meta["condition"], turn_index, self.placement)
+        depth, target = tp["depth"], tp["target_delay_ms"]
         deadline = submit_ts + target
 
         # ★ 안전 검사는 LLM 호출 **전에** (CONTRACT §5).
@@ -130,7 +130,7 @@ class Experiment:
         else:
             history = self._history_for(sess, conv)
             messages = history + [{"role": "user", "content": text}]
-            result = self.provider.complete(self._prompts[meta["context"]], messages)
+            result = self.provider.complete(self._system[depth], messages)
             with self._lock:
                 sess["history"].setdefault(conv, []).append({"role": "user", "content": text})
                 sess["history"][conv].append({"role": "assistant", "content": result["text"]})
@@ -140,8 +140,8 @@ class Experiment:
         record = {
             "session_id": sid,
             "participant_id": sess["participant_id"], "group": sess["group"],
-            "block": meta["block"], "conversation_index": conv,
-            "condition": meta["condition"], "context": meta["context"],
+            "conversation_index": conv,
+            "condition": meta["condition"], "depth": depth,
             "turn_index": turn_index, "practice": practice,
             "user_input_start_ts": start_ts, "user_input_submit_ts": submit_ts,
             "user_input_text": text, "user_input_chars": len(text),
@@ -152,8 +152,8 @@ class Experiment:
             "manipulation_ok": bool(not safety_flag and not practice
                                     and result["response_ts"] <= deadline),
             "prompt_version": self.cfg["version"],
-            "prompt_sha256": self._hashes[meta["context"]],
-            "empathy_variant": self.variant,
+            "base_prompt_sha256": self._base_hash,
+            "prompt_sha256": self._system_hash[depth],
             "model": result["model"],
             "temperature": m.get("temperature"), "max_tokens": m.get("max_tokens"),
             "finish_reason": result["finish_reason"],
@@ -167,8 +167,9 @@ class Experiment:
             "llm_request_ts": result["request_ts"], "llm_response_ts": result["response_ts"],
             "finish_reason": result["finish_reason"],
             "safety_flag": safety_flag, "bypass_delay": bypass,
-            "condition": meta["condition"], "context": meta["context"],
-            "prompt_sha256": self._hashes[meta["context"]], "model": result["model"],
+            "condition": meta["condition"], "depth": depth,
+            "base_prompt_sha256": self._base_hash,
+            "prompt_sha256": self._system_hash[depth], "model": result["model"],
             "turns_per_conversation": self.turns_per_conversation,
         }
 

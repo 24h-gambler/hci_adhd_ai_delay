@@ -80,8 +80,8 @@
 
         <div class="panel">
           <ul class="plain">
-            <li>오늘 하실 일은 AI 챗봇과 여섯 번의 짧은 대화를 나누는 것입니다.</li>
-            <li>대화가 하나 끝날 때마다 세 항목의 짧은 질문에 답해 주시면 됩니다.</li>
+            <li>오늘 하실 일은 AI 챗봇과 세 번의 대화를 나누는 것입니다.</li>
+            <li>대화가 하나 끝날 때마다 네 묶음의 질문에 답해 주시면 됩니다.</li>
             <li>대화가 모두 끝나면 40분 정도 이야기를 나누는 시간을 갖습니다. 이 부분은 녹음됩니다.</li>
             <li>언제든 “그만하겠습니다”라고 하시면 바로 멈춥니다. 불이익은 없고 사례비는 그대로 드립니다.</li>
           </ul>
@@ -121,9 +121,9 @@
         <div class="sheet">
           <p class="sheet-title">AI 대화 경험 연구 · 오늘의 진행</p>
           <ol class="sheet-list">
-            <li>AI 챗봇과 여섯 번의 짧은 대화를 나눕니다.</li>
-            <li>대화 하나는 다섯 번 주고받으면 마무리됩니다.</li>
-            <li>대화가 끝날 때마다 세 항목의 짧은 질문에 답합니다.</li>
+            <li>AI 챗봇과 세 번의 대화를 나눕니다.</li>
+            <li>대화 하나는 아홉 번 주고받으면 마무리됩니다.</li>
+            <li>대화가 끝날 때마다 네 묶음의 질문에 답합니다.</li>
             <li>모든 대화가 끝나면 40분 정도 이야기를 나눕니다. (녹음)</li>
           </ol>
           <ul class="sheet-dots">
@@ -198,76 +198,85 @@
       </div>
     </section>
 
-    <!-- ---------- 대화 직후 문항 · 3개 · 6회 (명세서 §1) ---------- -->
+    <!-- ---------- 대화 직후 문항 (대화 3개마다) ---------- -->
     <section class="screen" data-screen="survey">
       <div class="col">
         <h1>방금 대화에 대한 질문</h1>
-        <p class="lead">세 항목입니다. 답한 뒤에는 되돌아갈 수 없으니 확인하고 제출해 주세요.</p>
+        <p class="lead">정답이 없는 질문입니다. 답한 뒤에는 되돌아갈 수 없으니 확인하고 제출해 주세요.</p>
 
+        <p class="part-line" id="survey-part-line"></p>
         <form id="survey-form" novalidate>
 
+          <div class="survey-part" data-part="1">
           <fieldset class="q">
             <legend>①</legend>
-            <p class="q-text">방금 대화에서, 메시지를 보낸 뒤 AI의 답이 화면에 나타나기까지 대체로 몇 초쯤 걸렸다고 느끼셨나요?</p>
-            <div class="q-inline">
-              <span>약</span>
-              <label class="sr-only" for="q-time">초</label>
-              <input type="number" id="q-time" min="0" max="600" step="0.5" inputmode="decimal">
-              <span>초</span>
-              <label class="check-line inline"><input type="checkbox" id="q-time-unknown"><span>모르겠음</span></label>
-            </div>
-          </fieldset>
-
-          <fieldset class="q">
-            <legend>②</legend>
             <p class="q-text">방금 대화는 얼마나 불편하셨나요?</p>
             <div id="q-discomfort"></div>
           </fieldset>
 
           <fieldset class="q">
-            <legend>③</legend>
+            <legend>②</legend>
             <label class="q-text" for="q-word">방금 대화를 한 단어로 표현한다면 무엇인가요?</label>
             <input type="text" id="q-word" maxlength="30" autocomplete="off" spellcheck="false">
             <p class="q-sub">떠오르는 대로 적어 주세요. 어떤 단어든 괜찮습니다.</p>
           </fieldset>
 
+          </div>
+
+          <div class="survey-part" data-part="2" hidden>
+          <fieldset class="q">
+            <legend>③</legend>
+            <p class="q-text">방금 나눈 이야기에 대해</p>
+            <div id="q-engagement"></div>
+          </fieldset>
+          </div>
+
+          <div class="survey-part" data-part="3" hidden>
+          <fieldset class="q">
+            <legend>④</legend>
+            <p class="q-text">방금 대화한 AI에 대해 어떻게 느끼셨는지 표시해 주세요.</p>
+            <p class="placeholder-note">
+              ⚠ 아래 네 문항은 <strong>자리표시자</strong>입니다.
+              PETS-ER 원척도 문항으로 교체한 뒤 본 실험을 시작합니다.
+            </p>
+            <div id="q-pets"></div>
+          </fieldset>
+          </div>
+
           <p class="error" id="survey-error" hidden></p>
-          <button type="submit" class="btn btn-primary" data-primary>제출</button>
+          <button type="submit" class="btn btn-primary" id="btn-survey-next" data-primary>다음</button>
         </form>
       </div>
     </section>
 
-    <!-- ---------- 블록 종료 문항 · 2회 (명세서 §2) ---------- -->
+    <!-- ---------- 세션 종료 문항 (1회) ---------- -->
     <section class="screen" data-screen="engagement">
       <div class="col">
-        <h1 id="block-end-title">방금 나눈 이야기에 대해</h1>
-        <p class="lead" id="block-end-lead">정답이 없는 질문입니다. 편하게 답해 주세요.</p>
+        <h1>마지막 질문입니다</h1>
+        <p class="lead">세 번의 대화를 모두 떠올리며 답해 주세요.</p>
 
         <form id="engagement-form" novalidate>
 
           <fieldset class="q">
             <legend>가</legend>
-            <p class="q-text">방금 대화한 AI에 대해 어떻게 느끼셨는지 표시해 주세요.</p>
-            <p class="placeholder-note">
-              ⚠ 아래 네 문항은 <strong>자리표시자</strong>입니다.
-              PETS(Schmidmaier et al., CHI 2024) 원척도 문항으로 교체한 뒤 본 실험을 시작합니다.
-            </p>
-            <div id="q-pets"></div>
+            <p class="q-text">세 번의 대화에서 AI가 답하기까지 걸린 시간에 규칙이 있었다면, 어느 쪽에 가깝다고 생각하세요?</p>
+            <div class="choice-list" id="q-rule">
+              <label class="choice"><input type="radio" name="rule_guess" value="R1"><span>깊이 있는 답일수록 <strong>오래</strong> 걸렸다</span></label>
+              <label class="choice"><input type="radio" name="rule_guess" value="R2"><span>깊이 있는 답일수록 <strong>빨리</strong> 왔다</span></label>
+              <label class="choice"><input type="radio" name="rule_guess" value="R3"><span>특별한 규칙은 <strong>없었다</strong></span></label>
+            </div>
+            <p class="q-sub">모르시겠으면 가장 가까운 쪽을 고르시면 됩니다.</p>
           </fieldset>
 
           <fieldset class="q">
             <legend>나</legend>
-            <p class="q-text">방금 대화한 AI에 대한 인상을 표시해 주세요.</p>
-            <div id="q-godspeed"></div>
+            <p class="q-text">기다리는 상황에 대한 질문입니다.</p>
+            <p class="placeholder-note">
+              ⚠ 아래 문항은 <strong>자리표시자</strong>입니다.
+              QDQ(지연 혐오 설문) 원척도 문항으로 교체한 뒤 본 실험을 시작합니다.
+            </p>
+            <div id="q-qdq"></div>
           </fieldset>
-
-          <!-- 관여 지수 — 고민 상담 블록에만 (명세서 §2-2) -->
-          <div id="engagement-block" hidden>
-            <fieldset class="q">
-              <legend>다</legend>
-              <div id="q-engagement"></div>
-            </fieldset>
-          </div>
 
           <p class="error" id="engagement-error" hidden></p>
           <button type="submit" class="btn btn-primary" data-primary>제출</button>
@@ -278,9 +287,9 @@
     <!-- ---------- 휴식 ---------- -->
     <section class="screen" data-screen="break">
       <div class="col">
-        <h1>잠시 다른 활동을 하겠습니다</h1>
+        <h1>잠시 쉬어 가겠습니다</h1>
         <div class="panel">
-          <p>여기까지 절반이 끝났습니다. 3분 정도 다른 활동을 하겠습니다.</p>
+          <p>다음 대화를 시작하기 전에 잠시 쉬어 가겠습니다.</p>
           <p>자리에서 편하게 계시면 되고, 연구자가 안내하면 아래 버튼을 눌러 주세요.</p>
         </div>
         <button type="button" class="btn btn-primary" data-primary data-action="next">계속하기</button>
@@ -294,6 +303,10 @@
         <div class="panel">
           <p>오늘의 대화와 설문이 모두 끝났습니다. 참여해 주셔서 감사합니다.</p>
           <p>연구자에게 알려 주세요. 이어서 이야기를 나누는 시간이 있습니다.</p>
+        </div>
+        <div class="panel researcher-input" id="download-panel" hidden>
+          <p class="rs-note">연구자용 — 이 세션의 기록을 파일로 저장합니다.</p>
+          <button type="button" class="btn" id="btn-download">기록 내려받기 (JSONL)</button>
         </div>
       </div>
     </section>

@@ -41,19 +41,24 @@ def now_ms() -> int:
 
 # 규칙(prompts/system_common.txt)을 지키는 응답만 넣는다.
 # 2~4문장 · 마지막이 질문 하나 · 이모지/서식/금지어 없음 · 자기 감정 진술 없음.
-_MOCK_A = [
-    "말씀하신 그 장면이 인상적이셨군요. 어떤 부분이 가장 기억에 남으셨나요?",
-    "그 작품을 끝까지 보셨군요. 보시는 동안 특히 눈에 들어온 인물이 있으셨을 것 같습니다. 누구였나요?",
-    "그렇게 보셨군요. 처음 볼 때와 다시 볼 때의 인상이 달랐을 수도 있겠습니다. 어떤 점에서 그랬나요?",
-    "그 부분을 자세히 말씀해 주셨습니다. 그 장면에서 어떤 생각이 드셨나요?",
-]
-_MOCK_B = [
-    "그러셨군요. 그 일이 언제부터 신경 쓰이기 시작했나요?",
-    "그런 상황이셨네요. 말씀을 들어보니 정리가 잘 안 되는 상태로 지내신 것 같습니다. 어떤 부분이 제일 걸리셨나요?",
-    "쉽지 않으셨겠어요. 그 상황에서 지금까지 해보신 것이 있다면 무엇이었나요?",
-    "상황을 조금 더 여쭙고 싶습니다. 그때 주변에서는 어떤 반응이었나요?",
-]
-
+# 지시된 깊이대로 나오는 mock 응답. 사후 TES 평정 연습에도 쓸 수 있다.
+_MOCK = {
+    "deep": [
+        "말씀하신 '자꾸 미루게 된다'는 부분이 마음에 남습니다. 하려는 마음이 없어서가 아니라 시작하는 지점에서 막히는 상황으로 들립니다. 그 막히는 순간에는 주로 무엇이 떠오르시나요?",
+        "'정리가 안 된다'고 하신 게 걸립니다. 할 일이 많아서라기보다 어디부터인지가 안 잡히는 상태처럼 들립니다. 그럴 때 가장 먼저 손이 가는 것은 무엇인가요?",
+        "말씀 중에 '괜찮은 척했다'는 대목이 있었습니다. 그 자리에서는 드러내기 어려우셨던 것 같습니다. 그때 하고 싶었던 말은 무엇이었나요?",
+    ],
+    "medium": [
+        "그 일이 꽤 오래 이어지고 있는 상황이시군요. 언제부터 그러셨나요?",
+        "말씀을 들어보니 혼자 감당하고 계신 것 같습니다. 주변에는 이야기해 보셨나요?",
+        "그 상황이 반복되고 있군요. 마지막으로 그랬던 건 언제인가요?",
+    ],
+    "shallow": [
+        "그러시군요. 그게 언제부터였나요?",
+        "네. 얼마나 자주 그러신가요?",
+        "알겠습니다. 그때는 어디에 계셨나요?",
+    ],
+}
 
 class MockProvider:
     """검증용 제공자.
@@ -81,7 +86,7 @@ class MockProvider:
         if self.latency_mode == "fixed":
             base = 600 + jitter
         elif self.latency_mode == "slow":
-            base = 2500 + jitter
+            base = 4000 + jitter   # 얕음(3000) 초과 · 깊음(15000) 미만
         else:
             base = 280 + 3 * len(text) + jitter    # 'length' — 입력 길이 비례
         return max(1, round(base * self.latency_scale))
@@ -91,7 +96,9 @@ class MockProvider:
         self.calls.append({"system": system, "messages": [dict(m) for m in messages]})
         latency = self._latency_ms(system, messages)
         time.sleep(latency / 1000.0)
-        pool = _MOCK_B if "정서 표현" in system or "신경 쓰이는 일" in system else _MOCK_A
+        depth = ("deep" if "깊음" in system else
+                 "shallow" if "얕음" in system else "medium")
+        pool = _MOCK[depth]
         turn = sum(1 for m in messages if m["role"] == "user")
         text = pool[(turn - 1) % len(pool)]
         return {

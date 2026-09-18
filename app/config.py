@@ -107,29 +107,37 @@ def load_config(path=DEFAULT_CONFIG) -> dict:
 
 
 def _validate(cfg: dict) -> None:
-    for key in ("version", "empathy_variant", "model", "conversation", "delay_conditions"):
+    for key in ("version", "model", "conversation", "delay_placement"):
         if key not in cfg:
             raise ValueError(f"prompts.yaml에 '{key}'가 없습니다")
-    if cfg["empathy_variant"] not in ("A", "B", "C"):
-        raise ValueError(f"empathy_variant는 A/B/C 중 하나여야 합니다: {cfg['empathy_variant']!r}")
     if cfg["model"].get("stream") is not False:
         raise ValueError("model.stream은 반드시 false여야 합니다 (CONTRACT P4)")
-    dc = cfg["delay_conditions"]
-    for cond in ("immediate", "medium", "long"):
-        if cond not in dc:
-            raise ValueError(f"delay_conditions에 '{cond}'가 없습니다")
-        lo, hi = dc[cond]["min_ms"], dc[cond]["max_ms"]
-        if not (isinstance(lo, int) and isinstance(hi, int) and lo < hi):
-            raise ValueError(f"{cond} 범위가 잘못되었습니다: {lo}~{hi}")
-    order = ["immediate", "medium", "long"]
-    for a, b in zip(order, order[1:]):
-        if dc[a]["max_ms"] >= dc[b]["min_ms"]:
-            raise ValueError(f"{a}와 {b}의 지연 범위가 겹칩니다")
-    if "practice" not in dc or "fixed_ms" not in dc["practice"]:
-        raise ValueError("delay_conditions.practice.fixed_ms가 없습니다")
+    if cfg.get("indicator") != "none":
+        raise ValueError("indicator는 'none'이어야 합니다 — 화면 표시를 넣으면 해석 단서가 된다")
+
+    dp = cfg["delay_placement"]
+    for key in ("deep_ms", "medium_ms", "shallow_ms", "total_per_conversation_ms", "practice_ms"):
+        if not isinstance(dp.get(key), int) or dp[key] <= 0:
+            raise ValueError(f"delay_placement.{key}가 잘못되었습니다: {dp.get(key)!r}")
+    if not (dp["shallow_ms"] < dp["medium_ms"] < dp["deep_ms"]):
+        raise ValueError("delay_placement: 얕음 < 보통 < 깊음 이어야 합니다")
+
+    conv = cfg["conversation"]
+    turns = conv.get("turns_per_conversation")
+    if turns != 9:
+        raise ValueError(f"대화당 9턴이어야 합니다 (깊음3·보통3·얕음3): {turns!r}")
+    if conv.get("conversations") != 3:
+        raise ValueError("대화는 3개여야 합니다 — 3블록이다")
+
+    # ★ 세 조건의 총 지연이 같다는 것이 이 설계의 전제다. 산술로 확인한다.
+    expected = 3 * (dp["deep_ms"] + dp["medium_ms"] + dp["shallow_ms"])
+    if expected != dp["total_per_conversation_ms"]:
+        raise ValueError(
+            f"총 지연이 맞지 않습니다: 3×(깊음+보통+얕음)={expected}ms "
+            f"vs total_per_conversation_ms={dp['total_per_conversation_ms']}ms")
 
 
-def scaled_delay_conditions(cfg: dict, scale: float) -> dict:
+def scaled_delay_placement(cfg: dict, scale: float) -> dict:
     """E2E 고속 모드용. 세 조건과 연습 지연에 같은 배율을 적용한다.
 
     ★ min_ms와 max_ms의 하한 clamp가 서로 달라서(1 / 2), 배율이 너무 작으면
@@ -137,36 +145,23 @@ def scaled_delay_conditions(cfg: dict, scale: float) -> dict:
       모두 1~2ms가 되고 긺은 폭이 0이 된다 — 조건 간 대비가 사라진 채로
       축소 실행이 "통과"한다. 뭉개진 범위를 조용히 돌려주지 않고 터뜨린다.
     """
+    dp = dict(cfg["delay_placement"])
     if scale == 1.0:
-        return cfg["delay_conditions"]
-    dc = {}
-    for cond, rng in cfg["delay_conditions"].items():
-        if cond == "practice":
-            dc[cond] = {"fixed_ms": max(1, round(rng["fixed_ms"] * scale))}
-        else:
-            dc[cond] = {"min_ms": max(1, round(rng["min_ms"] * scale)),
-                        "max_ms": max(2, round(rng["max_ms"] * scale))}
-    _validate_scaled(dc, scale)
-    return dc
+        return dp
+    out = dict(dp)
+    for key in ("deep_ms", "medium_ms", "shallow_ms", "practice_ms"):
+        out[key] = max(1, round(dp[key] * scale))
+    out["total_per_conversation_ms"] = 3 * (out["deep_ms"] + out["medium_ms"] + out["shallow_ms"])
+    _validate_scaled(out, scale)
+    return out
 
 
-def _validate_scaled(dc: dict, scale: float) -> None:
-    """축소 후에도 조건 구조가 그대로 남아 있는지 확인한다."""
-    order = ["immediate", "medium", "long"]
-    for cond in order:
-        lo, hi = dc[cond]["min_ms"], dc[cond]["max_ms"]
-        if not 0 < lo < hi:
-            raise ValueError(
-                f"delay_scale={scale}에서 {cond} 범위가 무너집니다: {lo}~{hi} "
-                f"— 조건 내 분산이 사라집니다")
-    for a, b in zip(order, order[1:]):
-        if dc[a]["max_ms"] >= dc[b]["min_ms"]:
-            raise ValueError(
-                f"delay_scale={scale}에서 {a}와 {b}의 범위가 겹칩니다 "
-                f"— 조건 간 대비가 사라집니다")
-    if dc["practice"]["fixed_ms"] >= dc["immediate"]["min_ms"]:
+def _validate_scaled(dp: dict, scale: float) -> None:
+    """축소 후에도 세 깊이가 구별되는지 확인한다."""
+    if not (dp["shallow_ms"] < dp["medium_ms"] < dp["deep_ms"]):
         raise ValueError(
-            f"delay_scale={scale}에서 연습 지연이 즉시 조건 범위 안으로 들어갑니다")
+            f"delay_scale={scale}에서 세 깊이의 지연이 뭉개집니다: "
+            f"{dp['shallow_ms']}/{dp['medium_ms']}/{dp['deep_ms']}ms — 조작이 사라집니다")
 
 
 if __name__ == "__main__":

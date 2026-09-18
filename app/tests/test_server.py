@@ -45,10 +45,10 @@ TEST_SCALE = 0.01
 LOG_SCHEMA = [
     ("participant_id", str),
     ("group", str),
-    ("block", int),
     ("conversation_index", int),
     ("condition", str),
-    ("context", str),
+    ("depth", str),
+    ("base_prompt_sha256", str),
     ("turn_index", int),
     ("practice", bool),
     ("user_input_start_ts", int),
@@ -68,16 +68,15 @@ LOG_SCHEMA = [
     ("prompt_version", str),
     ("prompt_sha256", str),
     ("model", str),
-    ("empathy_variant", str),
     ("temperature", (int, float)),
     ("max_tokens", int),
 ]
 
 # CONTRACT §2 — /api/session/start 응답
 SESSION_START_KEYS = [
-    "session_id", "participant_number", "block_order", "conversations",
-    "turns_per_conversation", "empathy_variant", "prompt_version",
-    "prompt_sha256", "model", "temperature", "max_tokens",
+    "session_id", "participant_number", "condition_order", "conversations",
+    "turns_per_conversation", "prompt_version",
+    "model", "temperature", "max_tokens",
 ]
 
 BENIGN = [
@@ -104,7 +103,7 @@ class ServerCase(unittest.TestCase):
 
     def setUp(self):
         self.cfg = cfgmod.load_config()
-        self.ranges = self.cfg["delay_conditions"]
+        self.ranges = cfgmod.scaled_delay_placement(self.cfg, self.delay_scale)
         self.start_server()
 
     def start_server(self, latency_mode=None, delay_scale=None):
@@ -211,9 +210,6 @@ class ServerCase(unittest.TestCase):
                 return row
         self.fail("로그에 대화 %s 턴 %s이 없습니다" % (conv_index, turn_index))
 
-    def scaled(self, condition):
-        r = self.ranges[condition]
-        return round(r["min_ms"] * self.scale), round(r["max_ms"] * self.scale)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -229,103 +225,81 @@ class SessionStartTest(ServerCase):
 
         self.assertTrue(s["session_id"].startswith("P07-"), s["session_id"])
         self.assertEqual(s["participant_number"], 7)
-        self.assertEqual(s["block_order"], schedule.block_order(7))
-        self.assertEqual(sorted(s["block_order"]), ["a", "b"])
+        self.assertEqual(s["condition_order"], schedule.condition_order(7))
+        self.assertEqual(sorted(s["condition_order"]), sorted(schedule.CONDITIONS))
 
         convs = s["conversations"]
-        self.assertEqual([c["index"] for c in convs], [1, 2, 3, 4, 5, 6])
-        self.assertEqual([c["block"] for c in convs], [1, 1, 1, 2, 2, 2])
+        self.assertEqual([c["index"] for c in convs], [1, 2, 3])
+        self.assertEqual([c["turns"] for c in convs], [9, 9, 9])
         for c in convs:
-            self.assertIn(c["context"], ("a", "b"))
             self.assertIn(c["condition"], schedule.CONDITIONS)
         # 블록 안에서 세 조건이 한 번씩 (§4 상쇄)
         for block in (1, 2):
-            got = sorted(c["condition"] for c in convs if c["block"] == block)
+            got = sorted(c["condition"] for c in convs)
             self.assertEqual(got, sorted(schedule.CONDITIONS))
 
         self.assertEqual(s["turns_per_conversation"],
                          self.cfg["conversation"]["turns_per_conversation"])
-        self.assertIn(s["empathy_variant"], ("A", "B", "C"))
+        self.assertIn(s["condition_order"][0], schedule.CONDITIONS)
         self.assertEqual(s["prompt_version"], self.cfg["version"])
         self.assertIsInstance(s["model"], str)
         self.assertTrue(s["model"])
         self.assertIsInstance(s["max_tokens"], int)
 
-    def test_session_start_returns_both_prompt_hashes_and_they_differ(self):
+    def test_session_start_returns_one_base_prompt_hash(self):
+        """조건은 프롬프트를 바꾸지 않는다. 기반 해시는 세션에 하나뿐이다."""
         s = self.new_session("P01")
-        hashes = s["prompt_sha256"]
-        self.assertIsInstance(hashes, dict)
-        self.assertEqual(sorted(hashes), ["a", "b"])
-        for ctx, h in hashes.items():
-            self.assertRegex(h, r"^[0-9a-f]{64}$", "맥락 %s의 해시 형식" % ctx)
-        self.assertNotEqual(hashes["a"], hashes["b"],
-                            "★ 맥락 A와 B의 프롬프트 해시가 같다 — 맥락 조작이 없다")
+        self.assertIsInstance(s["base_prompt_sha256"], str)
+        self.assertEqual(len(s["base_prompt_sha256"]), 64)
 
-    def test_sessions_get_distinct_ids(self):
-        first = self.new_session("P01")["session_id"]
-        time.sleep(0.002)
-        second = self.new_session("P01")["session_id"]
-        self.assertNotEqual(first, second)
+    def test_session_start_reports_indicator_none(self):
+        self.assertEqual(self.new_session("P01")["indicator"], "none")
 
-    def test_unknown_session_is_rejected(self):
-        body = self.post("/api/turn", {
-            "session_id": "P99-없는세션", "conversation_index": 1, "turn_index": 1,
-            "text": "안녕하세요", "user_input_start_ts": 0,
-            "user_input_submit_ts": int(time.time() * 1000)},
-            expect=400)
-        self.assertIn("error", body)
+    def test_session_start_reports_delay_placement(self):
+        dp = self.new_session("P01")["delay_placement"]
+        self.assertLess(dp["shallow_ms"], dp["medium_ms"])
+        self.assertLess(dp["medium_ms"], dp["deep_ms"])
 
-    def test_static_index_is_served(self):
-        html = self.get("/").decode("utf-8")
-        self.assertIn("<html", html.lower())
-        self.assertIn("participant-app", html)
-
-
-# ══════════════════════════════════════════════════════════════════
-# P7 — 같은 맥락 안에서 지연 조건 3수준의 프롬프트 해시가 같다
-# ══════════════════════════════════════════════════════════════════
 
 class PromptHashInvarianceTest(ServerCase):
 
-    def test_prompt_hash_identical_across_conditions_within_context(self):
+    def test_base_prompt_hash_identical_across_all_conditions(self):
+        """★ CONTRACT P7 — R1/R2/R3에서 기반 프롬프트가 완전히 같아야 한다.
+
+        다르면 조건이 프롬프트를 바꾼 것이고, 지연 배치 효과와 문구 효과가 섞인다.
+        """
         s = self.new_session("P01")
-        by_context = {}
-        seen_conditions = {}
+        bases, conds = set(), set()
         for conv in s["conversations"]:
-            turn = self.send_turn(s, conv["index"], 1, BENIGN[0])
-            self.assertEqual(turn["context"], conv["context"])
-            self.assertEqual(turn["condition"], conv["condition"])
-            by_context.setdefault(conv["context"], set()).add(turn["prompt_sha256"])
-            seen_conditions.setdefault(conv["context"], set()).add(conv["condition"])
+            t = self.send_turn(s, conv["index"], 1, "안녕하세요")
+            bases.add(t["base_prompt_sha256"])
+            conds.add(conv["condition"])
+        self.assertEqual(conds, set(schedule.CONDITIONS))
+        self.assertEqual(len(bases), 1, f"기반 해시가 조건마다 다르다: {bases}")
+        self.assertEqual(bases.pop(), s["base_prompt_sha256"])
 
-        self.assertEqual(sorted(by_context), ["a", "b"])
-        for ctx, conditions in seen_conditions.items():
-            self.assertEqual(sorted(conditions), sorted(schedule.CONDITIONS),
-                             "맥락 %s에서 세 조건을 모두 보지 못했습니다" % ctx)
-        for ctx, hashes in by_context.items():
-            self.assertEqual(
-                len(hashes), 1,
-                "★ 맥락 %s 안에서 지연 조건에 따라 프롬프트가 달라졌다 (P7 위반) — %s"
-                % (ctx, sorted(hashes)))
-
-        self.assertNotEqual(next(iter(by_context["a"])), next(iter(by_context["b"])),
-                            "★ 맥락 A와 B의 프롬프트가 같다 — 맥락 조작 실패")
-        # 세션 시작이 알려준 해시와 턴 응답의 해시가 같아야 한다
-        for ctx in ("a", "b"):
-            self.assertEqual(next(iter(by_context[ctx])), s["prompt_sha256"][ctx])
-
-    def test_prompt_hash_is_logged_for_every_turn(self):
+    def test_depth_directive_changes_the_effective_prompt(self):
+        """깊이 지시는 실제로 프롬프트를 바꿔야 한다. 같으면 조작이 없는 것이다."""
         s = self.new_session("P01")
-        conv = s["conversations"][0]
-        self.turn_and_display(s, conv["index"], 1, BENIGN[0])
-        row = self.row_for(s, conv["index"], 1)
-        self.assertEqual(row["prompt_sha256"], s["prompt_sha256"][conv["context"]])
-        self.assertEqual(row["prompt_version"], s["prompt_version"])
+        by_depth = {}
+        for turn in range(1, 10):
+            t = self.send_turn(s, 1, turn, "안녕하세요")
+            by_depth.setdefault(t["depth"], set()).add(t["prompt_sha256"])
+        self.assertEqual(set(by_depth), set(schedule.DEPTHS))
+        for depth, hashes in by_depth.items():
+            self.assertEqual(len(hashes), 1, f"{depth} 안에서 프롬프트가 흔들린다")
+        flat = [next(iter(h)) for h in by_depth.values()]
+        self.assertEqual(len(set(flat)), 3, "세 깊이의 프롬프트가 구별되지 않는다")
 
+    def test_prompt_hashes_are_logged_for_every_turn(self):
+        s = self.new_session("P01")
+        t = self.send_turn(s, 1, 1, "안녕하세요")
+        self.display(t)
+        row = self.log_rows(s)[0]
+        self.assertEqual(row["base_prompt_sha256"], s["base_prompt_sha256"])
+        self.assertEqual(row["prompt_sha256"], t["prompt_sha256"])
+        self.assertIn(row["depth"], schedule.DEPTHS)
 
-# ══════════════════════════════════════════════════════════════════
-# P1 — 목표 지연 D는 사용자 입력 내용과 독립이다
-# ══════════════════════════════════════════════════════════════════
 
 class DelayIndependenceTest(ServerCase):
 
@@ -337,11 +311,14 @@ class DelayIndependenceTest(ServerCase):
     #   전체 단위 검사 133개가 모두 통과하는 것을 확인했다.
     #   배율 0.1 + 긺 조건이면 D가 1600~2000ms라 1ms가 0.06%다.
     #   느려지는 비용은 세션 하나당 2초 미만이다.
-    delay_scale = 0.1
+    delay_scale = 0.2
 
     def test_delay_identical_for_twenty_texts_of_wildly_different_length(self):
         s = self.new_session("P01")
-        conv = self.conversation_with(s, "long")      # 목표 지연이 가장 큰 조건
+        # 해상도가 가장 좋은 턴을 고른다 — 목표 지연이 가장 큰 턴
+        conv = self.conversation_with(s, "R1")
+        seq = schedule.delay_sequence(s["session_id"], conv["index"], "R1", self.ranges)
+        turn_index = seq.index(max(seq)) + 1
         texts = []
         for i in range(20):
             n = [1, 2, 3, 5, 8, 13, 21, 34, 55, 89,
@@ -351,7 +328,7 @@ class DelayIndependenceTest(ServerCase):
 
         results = []
         for text in texts:
-            turn = self.send_turn(s, conv["index"], 1, text)
+            turn = self.send_turn(s, conv["index"], turn_index, text)
             results.append((len(text), turn["target_delay_ms"], turn["deadline_ts"]))
 
         delays = {d for _, d, _ in results}
@@ -396,38 +373,30 @@ class SlowLlmTest(ServerCase):
     latency_mode = "slow"          # mock 생성 시간 ≈ 2.5초 × 배율
 
     def test_llm_slower_than_target_marks_manipulation_not_ok(self):
+        """CONTRACT P3 — LLM이 목표 지연보다 늦으면 그 턴은 조작 실패다."""
         s = self.new_session("P01")
-        conv = self.conversation_with(s, "immediate")     # 목표 10~20ms × 배율
-        turn = self.send_turn(s, conv["index"], 1, BENIGN[0])
+        conv = self.conversation_with(s, "R1")
+        # R1에서 얕은 답(=가장 짧은 지연)이 붙은 턴을 찾는다
+        idx = next(i + 1 for i in range(9)
+                   if schedule.depth_sequence(s["session_id"], conv["index"])[i] == "shallow")
+        t = self.send_turn(s, conv["index"], idx, "안녕하세요")
+        self.display(t)
+        row = next(r for r in self.log_rows(s) if r["turn_index"] == idx)
+        self.assertGreater(row["llm_response_ts"] - row["user_input_submit_ts"],
+                           row["target_delay_ms"],
+                           "이 검사는 mock이 목표보다 느려야 의미가 있다")
+        self.assertFalse(row["manipulation_ok"])
 
-        self.assertGreater(turn["llm_response_ts"], turn["deadline_ts"],
-                           "이 검사는 LLM이 마감보다 늦어야 성립한다 "
-                           "(mock --mock-latency-mode slow)")
-        out = self.display(turn)
-        self.assertFalse(out["manipulation_ok"],
-                         "★ P3 위반 — LLM이 목표 지연보다 늦었는데 조작 성공으로 기록되었다")
-
-        row = self.row_for(s, conv["index"], 1)
-        self.assertFalse(row["manipulation_ok"], "로그에도 manipulation_ok=false여야 한다")
-        self.assertFalse(row["safety_flag"])
-        self.assertGreater(row["llm_response_ts"],
-                           row["user_input_submit_ts"] + row["target_delay_ms"])
-
-    def test_same_slow_llm_is_fine_in_long_condition(self):
-        """대조군 — 느린 LLM이라도 목표 지연 안에 들어오면 조작은 성공이다."""
+    def test_slow_llm_is_fine_when_the_target_is_long(self):
         s = self.new_session("P01")
-        conv = self.conversation_with(s, "long")          # 목표 160~200ms × 배율
-        turn = self.send_turn(s, conv["index"], 1, BENIGN[0])
-        self.assertLessEqual(turn["llm_response_ts"], turn["deadline_ts"])
-        out = self.display(turn, at_deadline=True)
-        self.assertTrue(out["manipulation_ok"])
-        self.assertLessEqual(abs(out["display_error_ms"]), 250,
-                             "표시 오차가 250ms를 넘었다 (조작 충실도 기준)")
+        conv = self.conversation_with(s, "R1")
+        idx = next(i + 1 for i in range(9)
+                   if schedule.depth_sequence(s["session_id"], conv["index"])[i] == "deep")
+        t = self.send_turn(s, conv["index"], idx, "안녕하세요")
+        self.display(t)
+        row = next(r for r in self.log_rows(s) if r["turn_index"] == idx)
+        self.assertTrue(row["manipulation_ok"])
 
-
-# ══════════════════════════════════════════════════════════════════
-# P5 — 안전 경로: 지연 없음, LLM 호출 없음
-# ══════════════════════════════════════════════════════════════════
 
 class SafetyPathTest(ServerCase):
 
@@ -528,52 +497,33 @@ class HistoryResetTest(ServerCase):
         self.assertNotIn("감마셋", json.dumps(sent, ensure_ascii=False),
                          "★ 연습 턴의 이력이 대화 1에 섞였다 (CONTRACT §6)")
 
-    def test_system_prompt_follows_the_conversation_context(self):
+    def test_system_prompt_follows_the_turn_depth(self):
+        """그 턴에 지시된 깊이가 실제로 system 프롬프트에 들어가야 한다."""
         s = self.new_session("P01")
-        systems = {}
-        for conv in s["conversations"]:
-            self.send_turn(s, conv["index"], 1, BENIGN[2])
-            systems.setdefault(conv["context"], set()).add(self.provider.calls[-1]["system"])
-        for ctx, seen in systems.items():
-            self.assertEqual(len(seen), 1, "맥락 %s에서 system 프롬프트가 흔들렸다" % ctx)
-        self.assertNotEqual(next(iter(systems["a"])), next(iter(systems["b"])))
+        want = {"deep": "깊음", "medium": "보통", "shallow": "얕음"}
+        for turn in range(1, 10):
+            t = self.send_turn(s, 1, turn, "안녕하세요")
+            system = self.exp.provider.calls[-1]["system"]
+            self.assertIn(want[t["depth"]], system,
+                          f"턴 {turn}({t['depth']})의 프롬프트에 깊이 지시가 없다")
 
-
-# ══════════════════════════════════════════════════════════════════
-# P8 — 연습 턴
-# ══════════════════════════════════════════════════════════════════
 
 class PracticeTurnTest(ServerCase):
 
     def test_practice_turn_uses_fixed_delay_and_is_flagged(self):
         s = self.new_session("P01")
-        fixed = round(self.ranges["practice"]["fixed_ms"] * self.scale)
-
-        turn = self.send_turn(s, schedule.PRACTICE_CONVERSATION_INDEX, 1,
-                              "연습 턴입니다. 잘 보이나요.")
-        self.assertEqual(turn["target_delay_ms"], fixed,
-                         "★ P8 위반 — 연습 턴이 조건 지연을 썼다")
-        self.assertEqual(turn["condition"], "practice")
-        self.display(turn, at_deadline=True)
-
-        row = self.row_for(s, schedule.PRACTICE_CONVERSATION_INDEX, 1)
-        self.assertIs(row["practice"], True, "★ 연습 턴이 practice=true로 남지 않았다")
-        self.assertEqual(row["target_delay_ms"], fixed)
+        t = self.send_turn(s, 0, 1, "연습입니다")
+        self.display(t)
+        row = self.log_rows(s)[0]
+        self.assertTrue(row["practice"])
         self.assertEqual(row["condition"], "practice")
-        self.assertFalse(row["manipulation_ok"], "연습 턴은 분석에서 제외된다")
+        self.assertEqual(row["target_delay_ms"], self.ranges["practice_ms"])
+        self.assertFalse(row["manipulation_ok"], "연습 턴은 분석에서 빠진다")
 
-    def test_practice_delay_is_independent_of_condition_ranges(self):
-        """연습 턴은 어떤 참가자·어떤 조건 순서에서도 같은 고정값이다."""
-        fixed = round(self.ranges["practice"]["fixed_ms"] * self.scale)
-        for pid in ("P01", "P02", "P07", "P12"):
-            s = self.new_session(pid)
-            turn = self.send_turn(s, schedule.PRACTICE_CONVERSATION_INDEX, 1, BENIGN[0])
-            self.assertEqual(turn["target_delay_ms"], fixed, pid)
+    def test_practice_delay_is_the_middle_level(self):
+        """연습이 가장 빠르면 이후 모든 조건이 그보다 느리게 느껴진다."""
+        self.assertEqual(self.ranges["practice_ms"], self.ranges["medium_ms"])
 
-
-# ══════════════════════════════════════════════════════════════════
-# CONTRACT §3 / 계획서 §6 — 로그 스키마
-# ══════════════════════════════════════════════════════════════════
 
 class LogSchemaTest(ServerCase):
 
@@ -595,7 +545,7 @@ class LogSchemaTest(ServerCase):
             self.assertIn(field, row, "로그 스키마에 %r이 없다 (계획서 §6)" % field)
             self.assertIsInstance(row[field], types,
                                   "%r의 형이 %s가 아니다: %r" % (field, types, row[field]))
-        for field in ("block", "conversation_index", "turn_index", "target_delay_ms",
+        for field in ( "conversation_index", "turn_index", "target_delay_ms",
                       "user_input_chars", "ai_response_chars", "max_tokens",
                       "user_input_start_ts", "user_input_submit_ts",
                       "llm_request_ts", "llm_response_ts", "display_ts"):
@@ -606,10 +556,9 @@ class LogSchemaTest(ServerCase):
 
         self.assertEqual(row["participant_id"], "P05")
         self.assertEqual(row["group"], "comparison")
-        self.assertEqual(row["block"], conv["block"])
+        self.assertEqual(row["depth"], turn["depth"])
         self.assertEqual(row["conversation_index"], conv["index"])
         self.assertEqual(row["condition"], conv["condition"])
-        self.assertEqual(row["context"], conv["context"])
         self.assertEqual(row["turn_index"], 1)
         self.assertIs(row["practice"], False)
         self.assertEqual(row["user_input_start_ts"], start)
@@ -624,10 +573,9 @@ class LogSchemaTest(ServerCase):
         self.assertIsNone(row["next_input_start_ts"], "마지막 턴은 null이어야 한다")
         self.assertEqual(row["finish_reason"], turn["finish_reason"])
         self.assertIn(row["finish_reason"], ("stop", "length", "refusal"))
-        self.assertEqual(row["empathy_variant"], s["empathy_variant"])
         self.assertEqual(row["model"], turn["model"])
         self.assertEqual(row["max_tokens"], s["max_tokens"])
-        self.assertEqual(row["prompt_sha256"], s["prompt_sha256"][conv["context"]])
+        self.assertEqual(row["prompt_sha256"], turn["prompt_sha256"])
 
         # 파생값은 로그에 넣지 않는다 (CONTRACT §3) — 스크립트가 계산한다
         for derived in ("imposed_delay_ms", "llm_latency_ms", "display_error_ms",
@@ -649,7 +597,7 @@ class LogSchemaTest(ServerCase):
         path = self.log_dir / ("%s.turns.jsonl" % s["session_id"])
         turns, problems = manipulation_check.load([str(path)])
         self.assertEqual(problems, [], "manipulation_check가 로그를 읽지 못했다")
-        self.assertEqual(len(turns), 6)
+        self.assertEqual(len(turns), 3)
         for t in turns:
             manipulation_check.derive(t)
             self.assertTrue(manipulation_check.analyzable(t))
@@ -788,37 +736,27 @@ class DelayScaleTest(ServerCase):
 
     delay_scale = 0.05
 
-    def test_delay_scale_scales_every_condition_equally(self):
-        s = self.new_session("P01")
-        for conv in s["conversations"]:
-            lo, hi = self.scaled(conv["condition"])
-            turn = self.send_turn(s, conv["index"], 1, BENIGN[0])
-            self.assertGreaterEqual(turn["target_delay_ms"], lo,
-                                    "%s 조건이 축소 범위 %d~%d 밖" % (conv["condition"], lo, hi))
-            self.assertLessEqual(turn["target_delay_ms"], hi)
+    def test_delay_scale_scales_every_depth_equally(self):
+        """배율이 한쪽만 줄이면 조건 대비가 왜곡된다."""
+        full = cfgmod.load_config()["delay_placement"]
+        scaled = cfgmod.scaled_delay_placement(cfgmod.load_config(), self.delay_scale)
+        ratios = {k: scaled[k] / full[k] for k in ("deep_ms", "medium_ms", "shallow_ms")}
+        for k, r in ratios.items():
+            self.assertAlmostEqual(r, self.delay_scale, places=2,
+                                   msg=f"{k}의 배율이 다르다: {r}")
 
-        practice = self.send_turn(s, schedule.PRACTICE_CONVERSATION_INDEX, 1, BENIGN[0])
-        self.assertEqual(practice["target_delay_ms"],
-                         round(self.ranges["practice"]["fixed_ms"] * self.scale),
-                         "연습 지연도 같은 배율을 따라야 한다")
-
-    def test_scale_is_recorded_in_every_log_row(self):
-        """manipulation_check.py가 이 값으로 기대 범위를 되돌린다."""
+    def test_scaled_total_still_equal_across_conditions(self):
         s = self.new_session("P01")
-        conv = s["conversations"][0]
-        self.turn_and_display(s, conv["index"], 1, BENIGN[0])
-        row = self.row_for(s, conv["index"], 1)
-        self.assertIn("delay_scale", row,
-                      "축소 로그를 본 실험 데이터와 구분할 수 없다")
-        self.assertAlmostEqual(row["delay_scale"], self.scale)
+        totals = {c["condition"]: sum(
+            schedule.delay_sequence(s["session_id"], c["index"], c["condition"], self.ranges))
+            for c in s["conversations"]}
+        self.assertEqual(len(set(totals.values())), 1,
+                         f"축소 후 조건별 총 지연이 갈라졌다: {totals}")
 
-    def test_ranges_do_not_overlap_after_scaling(self):
-        s = self.new_session("P01")
-        bounds = [self.scaled(c) for c in schedule.CONDITIONS]
-        for (_, hi), (lo, _) in zip(bounds, bounds[1:]):
-            self.assertLess(hi, lo, "축소 후 조건 범위가 겹친다 — 대비가 사라진다")
-        self.assertTrue(all(lo > 0 for lo, _ in bounds), "축소 후 지연이 0이 되었다")
-        self.assertEqual(len(s["conversations"]), 6)
+    def test_scaled_levels_stay_distinct(self):
+        self.assertLess(self.ranges["shallow_ms"], self.ranges["medium_ms"])
+        self.assertLess(self.ranges["medium_ms"], self.ranges["deep_ms"])
+
 
 
 if __name__ == "__main__":

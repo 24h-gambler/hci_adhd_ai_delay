@@ -18,7 +18,7 @@ from pathlib import Path
 # 로그에 반드시 있어야 하는 필드 (순서 고정 — 사람이 읽기 쉽게)
 TURN_FIELDS = [
     "session_id", "participant_id", "group",
-    "block", "conversation_index", "condition", "context",
+    "conversation_index", "condition", "depth",
     "turn_index", "practice",
     "user_input_start_ts", "user_input_submit_ts", "user_input_text", "user_input_chars",
     "target_delay_ms",
@@ -26,7 +26,7 @@ TURN_FIELDS = [
     "ai_response_text", "ai_response_chars",
     "next_input_start_ts",
     "safety_flag", "manipulation_ok",
-    "prompt_version", "prompt_sha256", "empathy_variant",
+    "prompt_version", "base_prompt_sha256", "prompt_sha256",
     "model", "temperature", "max_tokens", "finish_reason",
     "delay_scale",
 ]

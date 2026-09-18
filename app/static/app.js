@@ -121,6 +121,7 @@
     safetyEvents: [],
     surveyShownTs: null,
     lastSubmit: Promise.resolve(),
+    surveyPart: 1,
     endAutoTimer: null,
     endPending: false,
     doneReached: false
@@ -135,42 +136,29 @@
 
   var TOPIC_CARD_TITLE = '이번에는 이런 이야기를 해 주세요';
 
-  var TOPIC_CARD = {
-    a: [
-      '최근에 보신 영화, 드라마, 영상 같은\n콘텐츠에 대해 이야기해 주세요.',
-      '무엇이든 편하게 말씀하시면 됩니다.',
-      '5번 주고받으면 이 대화는 마무리됩니다.'
-    ],
-    // 명세서 §3 — 관여는 AI의 말투가 아니라 참가자 자신의 주제에서 나와야 한다.
-    // 그래서 "실제"를 두 번 강조한다. 이 줄을 빼면 안 된다.
-    b: [
-      '요즘 실제로 신경 쓰이거나 마음에 걸리는 일에 대해\n이야기해 주세요.',
-      '지어낸 이야기가 아니라 실제 고민일 때\n연구에 도움이 됩니다.',
-      '말씀하고 싶은 만큼만 하시면 되고,\n불편하시면 언제든 멈추실 수 있습니다.',
-      '5번 주고받으면 이 대화는 마무리됩니다.'
-    ]
-  };
+  var TOPIC_CARD = [
+    '요즘 실제로 신경 쓰이거나 마음에 걸리는 일에 대해\n이야기해 주세요.',
+    '지어낸 이야기가 아니라 실제 고민일 때\n연구에 도움이 됩니다.',
+    '말씀하고 싶은 만큼만 하시면 되고,\n불편하시면 언제든 멈추실 수 있습니다.',
+    '한 대화는 아홉 번 주고받으면 마무리됩니다.\n대화는 모두 세 번입니다.'
+  ];
 
-  var TOPIC_LINE = {
-    a: '대화 주제 — 최근에 보신 영화, 드라마, 영상 같은 콘텐츠',
-    b: '대화 주제 — 요즘 신경 쓰이거나 마음에 걸리는 일'
-  };
+  var TOPIC_LINE = '대화 주제 — 요즘 신경 쓰이거나 마음에 걸리는 일';
 
   var PRACTICE_NOTE = '연습입니다. 아무 말이나 한 문장 입력하고 보내 보세요.';
 
-  var PETS_ITEMS = [
-    '〔자리표시자 가-1〕 PETS 이해·신뢰 요인 1번 문항 — 원척도 문항으로 교체 예정',
-    '〔자리표시자 가-2〕 PETS 이해·신뢰 요인 2번 문항 — 원척도 문항으로 교체 예정',
-    '〔자리표시자 가-3〕 PETS 정서적 조응 요인 1번 문항 — 원척도 문항으로 교체 예정',
-    '〔자리표시자 가-4〕 PETS 정서적 조응 요인 2번 문항 — 원척도 문항으로 교체 예정'
+  var QDQ_ITEMS = [
+    '〔자리표시자 나-1〕 QDQ 문항 1 — 원척도 문항으로 교체 예정',
+    '〔자리표시자 나-2〕 QDQ 문항 2 — 원척도 문항으로 교체 예정',
+    '〔자리표시자 나-3〕 QDQ 문항 3 — 원척도 문항으로 교체 예정',
+    '〔자리표시자 나-4〕 QDQ 문항 4 — 원척도 문항으로 교체 예정'
   ];
 
-  var GODSPEED_PAIRS = [
-    ['인위적인', '자연스러운'],
-    ['기계 같은', '사람 같은'],
-    ['의식이 없는', '의식이 있는'],
-    ['인공적인', '생명체 같은'],
-    ['뻣뻣하게 움직이는', '우아하게 움직이는']   // 5번째 = 파일럿 판단 항목
+  var PETS_ITEMS = [
+    '〔자리표시자 ④-1〕 PETS 이해·신뢰 요인 1번 문항 — 원척도 문항으로 교체 예정',
+    '〔자리표시자 ④-2〕 PETS 이해·신뢰 요인 2번 문항 — 원척도 문항으로 교체 예정',
+    '〔자리표시자 ④-3〕 PETS 정서적 조응 요인 1번 문항 — 원척도 문항으로 교체 예정',
+    '〔자리표시자 ④-4〕 PETS 정서적 조응 요인 2번 문항 — 원척도 문항으로 교체 예정'
   ];
 
   // 명세서 §2-2 — 고민 상담 블록에만. 1~5점. ④는 역방향이며 채점 시 반전한다.
@@ -223,27 +211,18 @@
      ========================================================== */
 
   function buildPlan(session) {
-    var steps = [{ screen: 'briefing' }, { screen: 'practice' }];
-    var convs = session.conversations || [];
-    var blocks = [];
-    convs.forEach(function (c) { if (blocks.indexOf(c.block) < 0) { blocks.push(c.block); } });
-    blocks.sort(function (x, y) { return x - y; });
+    // 재설계: 대화 3개(블록) × 9턴. 맥락은 하나이므로 주제 안내는 한 번만.
+    var steps = [{ screen: 'briefing' }, { screen: 'practice' }, { screen: 'card' }];
+    var convs = (session.conversations || []).slice()
+      .sort(function (x, y) { return x.index - y.index; });
 
-    blocks.forEach(function (b, bi) {
-      var inBlock = convs.filter(function (c) { return c.block === b; })
-                         .sort(function (x, y) { return x.index - y.index; });
-      if (!inBlock.length) { return; }
-      var ctx = inBlock[0].context;
-
-      steps.push({ screen: 'card', block: b, context: ctx, conv: inBlock[0] });
-      inBlock.forEach(function (c) {
-        steps.push({ screen: 'chat', block: b, context: c.context, conv: c });
-        steps.push({ screen: 'survey', block: b, context: c.context, conv: c });
-      });
-      steps.push({ screen: 'engagement', block: b, context: ctx, conv: inBlock[inBlock.length - 1] });
-      if (bi < blocks.length - 1) { steps.push({ screen: 'break', block: b }); }
+    convs.forEach(function (c, i) {
+      steps.push({ screen: 'chat', conv: c });
+      steps.push({ screen: 'survey', conv: c });
+      if (i < convs.length - 1) { steps.push({ screen: 'break', conv: c }); }
     });
 
+    steps.push({ screen: 'engagement' });   // 세션 종료 문항 (3택 규칙 탐지 등)
     steps.push({ screen: 'done' });
     return steps;
   }
@@ -262,7 +241,7 @@
 
     post('/api/session/start', { participant_id: pid, group: group }).then(function (res) {
       State.session = res;
-      State.turnsTotal = res.turns_per_conversation || 5;
+      State.turnsTotal = res.turns_per_conversation || 9;
       State.plan = buildPlan(res);
       State.stepIndex = -1;
       try { localStorage.setItem(LAST_SESSION_KEY, res.session_id); } catch (e) { /* 무시 */ }
@@ -289,10 +268,8 @@
   }
 
   function enterStep(step) {
-    State.block = step.block != null ? step.block : null;
     State.conversationIndex = step.conv ? step.conv.index : null;
     State.condition = step.conv ? step.conv.condition : null;
-    State.context = step.context != null ? step.context : null;
 
     switch (step.screen) {
       case 'briefing':
@@ -302,12 +279,11 @@
       case 'practice':
         State.conversationIndex = 0;
         State.condition = 'practice';
-        State.context = null;
         startConversation({ index: 0, block: null, context: null, condition: 'practice' }, true);
         break;
 
       case 'card':
-        renderCard(step.context);
+        renderCard();
         showScreen('card');
         break;
 
@@ -336,11 +312,11 @@
     }
   }
 
-  function renderCard(ctx) {
+  function renderCard() {
     var body = D.topicCardBody;
     clear(body);
     if (D.topicCardTitle) { D.topicCardTitle.textContent = TOPIC_CARD_TITLE; }
-    (TOPIC_CARD[ctx] || TOPIC_CARD.a).forEach(function (para) {
+    TOPIC_CARD.forEach(function (para) {
       var p = el('p', null, para);
       body.appendChild(p);
     });
@@ -353,7 +329,6 @@
   function startConversation(conv, isPractice) {
     State.conversationIndex = conv.index;
     State.condition = isPractice ? 'practice' : conv.condition;
-    State.context = isPractice ? null : conv.context;
     State.turnsTotal = isPractice ? 1 : (State.session && State.session.turns_per_conversation) || 5;
     State.turnsSent = 0;
     State.prevTurnId = null;          // 대화가 바뀌면 직전 턴 연결을 끊는다 (마지막 턴은 next_input null)
@@ -362,7 +337,7 @@
     State.awaiting = false;
 
     clear(D.chatLog);
-    D.chatTopic.textContent = isPractice ? '연습' : (TOPIC_LINE[conv.context] || '');
+    D.chatTopic.textContent = isPractice ? '연습' : TOPIC_LINE;
     D.chatNote.textContent = isPractice ? PRACTICE_NOTE : '';
     D.chatNote.hidden = !isPractice;
     if (State.endAutoTimer) { clearTimeout(State.endAutoTimer); State.endAutoTimer = null; }
@@ -656,7 +631,6 @@
       turn_index: State.turnsSent,
       turn_id: p ? p.turnId : null,
       condition: State.condition,
-      context: State.context
     });
     setComposerEnabled(false);
     D.safetyUnlock.checked = false;
@@ -724,13 +698,39 @@
       text: '', min: 1, max: 7,
       left: '전혀 불편하지 않았다', right: '매우 불편했다'
     });
+
+    clear(D.qEngagement);
+    ENGAGEMENT_ITEMS.forEach(function (it, i) {
+      scaleRow(D.qEngagement, it.key, {
+        text: '\u2460\u2461\u2462\u2463'.charAt(i) + ' ' + it.text,
+        min: 1, max: 5, left: it.left, right: it.right
+      });
+    });
+
+    clear(D.qPets);
+    PETS_ITEMS.forEach(function (t, i) {
+      scaleRow(D.qPets, 'pets_' + (i + 1), {
+        text: t, min: 1, max: 7,
+        left: '전혀 그렇지 않다', right: '매우 그렇다'
+      });
+    });
+  }
+
+  function showSurveyPart(n) {
+    State.surveyPart = n;
+    D.surveyParts.forEach(function (el, i) { el.hidden = (i + 1) !== n; });
+    if (D.surveyPartLine) { D.surveyPartLine.textContent = n + ' / ' + D.surveyParts.length; }
+    if (D.btnSurveyNext) {
+      D.btnSurveyNext.textContent = (n < D.surveyParts.length) ? '다음' : '제출';
+    }
+    window.scrollTo(0, 0);
+    var host = $('screens');
+    if (host) { host.scrollTop = 0; }
   }
 
   function resetSurveyForm() {
     buildSurveyForm();
-    D.qTime.value = '';
-    D.qTime.disabled = false;
-    D.qTimeUnknown.checked = false;
+    showSurveyPart(1);
     if (D.qWord) { D.qWord.value = ''; }
     D.surveyError.hidden = true;
   }
@@ -742,14 +742,28 @@
   }
 
   function submitSurvey() {
-    var unknown = D.qTimeUnknown.checked;
-    var raw = (D.qTime.value || '').trim();
     var missing = [];
-
-    if (!unknown && raw === '') { missing.push('①'); }
-    if (!unknown && raw !== '' && (!isFinite(Number(raw)) || Number(raw) < 0)) { missing.push('①'); }
-    if (radioValue('discomfort') == null) { missing.push('②'); }
-    if (!(D.qWord && D.qWord.value.trim())) { missing.push('③'); }
+    if (State.surveyPart < D.surveyParts.length) {
+      if (State.surveyPart === 1) {
+        if (radioValue('discomfort') == null) { missing.push('①'); }
+        if (!(D.qWord && D.qWord.value.trim())) { missing.push('②'); }
+      } else if (State.surveyPart === 2) {
+        ENGAGEMENT_ITEMS.forEach(function (it, k) {
+          if (radioValue(it.key) == null) { missing.push('③-' + (k + 1)); }
+        });
+      }
+      if (missing.length) {
+        D.surveyError.textContent = '아직 답하지 않은 항목이 있습니다: ' + missing.join(', ');
+        D.surveyError.hidden = false;
+        return Promise.resolve(false);
+      }
+      D.surveyError.hidden = true;
+      showSurveyPart(State.surveyPart + 1);
+      return Promise.resolve(false);      // 아직 제출하지 않는다
+    }
+    for (var i = 1; i <= 4; i++) {
+      if (radioValue('pets_' + i) == null) { missing.push('④-' + i); }
+    }
 
     if (missing.length) {
       D.surveyError.textContent = '아직 답하지 않은 항목이 있습니다: ' + missing.join(', ');
@@ -759,70 +773,49 @@
     D.surveyError.hidden = true;
 
     var responses = {
-      time_estimate_sec: unknown ? null : Number(raw),
-      time_estimate_unknown: unknown,
       discomfort: radioValue('discomfort'),
       one_word: D.qWord ? D.qWord.value.trim() : '',
-      block: State.block,
       condition: State.condition,
-      context: State.context
+      conversation_index: State.conversationIndex
     };
+    var i;
+    for (i = 1; i <= 4; i++) { responses['pets_' + i] = radioValue('pets_' + i); }
+    ENGAGEMENT_ITEMS.forEach(function (it) { responses[it.key] = radioValue(it.key); });
+    var raw4 = radioValue('engagement_4');
+    responses.engagement_4_reversed = (raw4 == null) ? null : (6 - raw4);
+    var vals = [responses.engagement_1, responses.engagement_2,
+                responses.engagement_3, responses.engagement_4_reversed];
+    responses.engagement_index = vals.some(function (v) { return v == null; })
+      ? null : Math.round((vals.reduce(function (a, b) { return a + b; }, 0) / 4) * 100) / 100;
 
     return sendSurvey('per_condition', responses);
   }
 
-  function buildEngagementForm(ctx) {
-    // 명세서 §2 — 블록 종료 문항. PETS·Godspeed는 두 블록 모두,
-    // 관여 지수는 고민 상담 블록(b)에만.
-    clear(D.qPets);
-    PETS_ITEMS.forEach(function (t, i) {
-      scaleRow(D.qPets, 'pets_' + (i + 1), {
-        text: t, min: 1, max: 7,
+  function buildEngagementForm() {
+    var picked = document.querySelector('input[name="rule_guess"]:checked');
+    if (picked) { picked.checked = false; }
+    clear(D.qQdq);
+    QDQ_ITEMS.forEach(function (t, i) {
+      scaleRow(D.qQdq, 'qdq_' + (i + 1), {
+        text: t, min: 1, max: 5,
         left: '전혀 그렇지 않다', right: '매우 그렇다'
       });
     });
-
-    clear(D.qGodspeed);
-    // Holmberg와 같은 척도·같은 점수 범위(1~5)를 쓴다. 5문항 모두 유지한다.
-    GODSPEED_PAIRS.forEach(function (pair, i) {
-      scaleRow(D.qGodspeed, 'godspeed_' + (i + 1), {
-        text: '', min: 1, max: 5, left: pair[0], right: pair[1]
-      });
-    });
-
-    var wantEngagement = (ctx === 'b');
-    if (D.engagementBlock) { D.engagementBlock.hidden = !wantEngagement; }
-    clear(D.qEngagement);
-    if (wantEngagement) {
-      ENGAGEMENT_ITEMS.forEach(function (it, i) {
-        scaleRow(D.qEngagement, it.key, {
-          text: '\u2460\u2461\u2462\u2463'.charAt(i) + ' ' + it.text,
-          min: 1, max: 5, left: it.left, right: it.right
-        });
-      });
-    }
     D.engagementError.hidden = true;
   }
 
-  function openEngagement(step) {
-    buildEngagementForm(step.context);
+  function openEngagement() {
+    buildEngagementForm();
     State.surveyShownTs = nowMs();
     showScreen('engagement');
   }
 
   function submitEngagement() {
-    var wantEngagement = (State.context === 'b');
-    var missing = [], i;
-    for (i = 1; i <= 4; i++) {
-      if (radioValue('pets_' + i) == null) { missing.push('가-' + i); }
-    }
-    for (i = 1; i <= 5; i++) {
-      if (radioValue('godspeed_' + i) == null) { missing.push('나-' + i); }
-    }
-    if (wantEngagement) {
-      ENGAGEMENT_ITEMS.forEach(function (it, k) {
-        if (radioValue(it.key) == null) { missing.push('다-' + (k + 1)); }
-      });
+    var missing = [];
+    var guess = document.querySelector('input[name="rule_guess"]:checked');
+    if (!guess) { missing.push('가'); }
+    for (var i = 1; i <= QDQ_ITEMS.length; i++) {
+      if (radioValue('qdq_' + i) == null) { missing.push('나-' + i); }
     }
     if (missing.length) {
       D.engagementError.textContent = '아직 답하지 않은 항목이 있습니다: ' + missing.join(', ');
@@ -831,25 +824,9 @@
     }
     D.engagementError.hidden = true;
 
-    var responses = {
-      block: State.block,
-      context: State.context
-    };
-    for (i = 1; i <= 4; i++) { responses['pets_' + i] = radioValue('pets_' + i); }
-    for (i = 1; i <= 5; i++) { responses['godspeed_' + i] = radioValue('godspeed_' + i); }
-    if (wantEngagement) {
-      ENGAGEMENT_ITEMS.forEach(function (it) { responses[it.key] = radioValue(it.key); });
-      // ④는 역방향 문항이다. 반전값을 함께 남겨 분석에서 다시 뒤집지 않게 한다.
-      var raw4 = radioValue('engagement_4');
-      responses.engagement_4_reversed = (raw4 == null) ? null : (6 - raw4);
-      var vals = [responses.engagement_1, responses.engagement_2,
-                  responses.engagement_3, responses.engagement_4_reversed];
-      responses.engagement_index =
-        vals.some(function (v) { return v == null; }) ? null
-          : Math.round((vals.reduce(function (a, b) { return a + b; }, 0) / 4) * 100) / 100;
-    }
-
-    return sendSurvey('block_end', responses);
+    var responses = { rule_guess: guess.value };
+    for (var j = 1; j <= QDQ_ITEMS.length; j++) { responses['qdq_' + j] = radioValue('qdq_' + j); }
+    return sendSurvey('session_end', responses);
   }
 
   function sendSurvey(kind, responses) {
@@ -916,10 +893,9 @@
         empathy_variant: State.session ? State.session.empathy_variant : null,
         prompt_version: State.session ? State.session.prompt_version : null,
         screen: State.screen,
-        block: State.block,
         conversation_index: State.conversationIndex,
         condition: State.condition,
-        context: State.context,
+        condition: State.condition,
         turns_sent: State.turnsSent,
         turns_total: State.turnsTotal,
         safety_events: State.safetyEvents,
@@ -1162,8 +1138,7 @@
           conversationIndex: State.conversationIndex,
           turnIndex: State.turnsSent,
           condition: State.condition,
-          context: State.context
-        };
+            };
       },
 
       send: function (text) {
@@ -1206,20 +1181,20 @@
 
       fillSurvey: function () {
         if (State.screen === 'survey') {
-          D.qTime.value = '8';
-          D.qTime.dispatchEvent(new Event('input', { bubbles: true }));
           checkRadio('discomfort', 4);
           D.qWord.value = '차분';
           D.qWord.dispatchEvent(new Event('input', { bubbles: true }));
-          D.surveyForm.querySelector('[data-primary]').click();
+          D.btnSurveyNext.click();                       // 1 → 2
+          ENGAGEMENT_ITEMS.forEach(function (it) { checkRadio(it.key, 4); });
+          D.btnSurveyNext.click();                       // 2 → 3
+          for (var pi = 1; pi <= 4; pi++) { checkRadio('pets_' + pi, 4); }
+          D.btnSurveyNext.click();                       // 제출
           return State.lastSubmit;
         }
         if (State.screen === 'engagement') {
-          for (var i = 1; i <= 4; i++) { checkRadio('pets_' + i, 4); }
-          for (var j = 1; j <= 5; j++) { checkRadio('godspeed_' + j, 3); }
-          if (State.context === 'b') {
-            ENGAGEMENT_ITEMS.forEach(function (it) { checkRadio(it.key, 4); });
-          }
+          var g = document.querySelector('input[name="rule_guess"][value="R3"]');
+          if (g) { g.checked = true; g.dispatchEvent(new Event('change', { bubbles: true })); }
+          for (var q = 1; q <= QDQ_ITEMS.length; q++) { checkRadio('qdq_' + q, 3); }
           D.engagementForm.querySelector('[data-primary]').click();
           return State.lastSubmit;
         }
@@ -1291,16 +1266,19 @@
 
     // 설문
     D.surveyForm = $('survey-form');
-    D.qTime = $('q-time');
-    D.qTimeUnknown = $('q-time-unknown');
     D.qDiscomfort = $('q-discomfort');
     D.qPets = $('q-pets');
-    D.qGodspeed = $('q-godspeed');
     D.surveyError = $('survey-error');
 
     D.engagementForm = $('engagement-form');
     D.qEngagement = $('q-engagement');
     D.qWord = $('q-word');
+    D.qQdq = $('q-qdq');
+    D.surveyParts = Array.prototype.slice.call(document.querySelectorAll('.survey-part'));
+    D.surveyPartLine = $('survey-part-line');
+    D.btnSurveyNext = $('btn-survey-next');
+    D.btnDownload = $('btn-download');
+    D.downloadPanel = $('download-panel');
     D.engagementBlock = $('engagement-block');
     D.engagementError = $('engagement-error');
 
@@ -1334,10 +1312,6 @@
       }
     });
 
-    D.qTimeUnknown.addEventListener('change', function () {
-      D.qTime.disabled = D.qTimeUnknown.checked;
-      if (D.qTimeUnknown.checked) { D.qTime.value = ''; }
-    });
 
     D.surveyForm.addEventListener('submit', function (e) {
       e.preventDefault();
