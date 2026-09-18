@@ -125,25 +125,124 @@ requirements.txt     비어 있음 — mock 경로는 표준 라이브러리만
 정적 파일을 함수가 서빙하므로 **로컬과 배포의 코드 경로가 하나**다.
 `app/tests/e2e.js`를 배포본에 그대로 돌릴 수 있다.
 
-## ⚠️ 배포가 막혀 있다 — 계정 권한
+## 배포 상태
+
+프로젝트는 대시보드에서 한 번 만들어졌고(`hci_adhd_ai_delay`), 그 뒤로는
+브랜치에 푸시할 때마다 자동 배포된다. MCP 토큰으로는 프로젝트 **생성**이
+막혀 있었다(403) — 조회·로그·배포 확인은 된다.
+
+## 🔴 배포되고도 API 가 통째로 죽어 있던 사고
+
+처음 네 번의 배포는 전부 "성공"이었고 화면도 떴다. 그런데 `/api/health` 가
+JSON 대신 **HTML** 을 돌려줬다. 즉 **API 가 하나도 동작하지 않는 상태로
+배포가 성공해 보였다.** 원인이 두 겹이었다.
+
+### 겹 1 — rewrite 가 경로를 바꾼다
+
+`vercel.json` 의 catch-all rewrite 는 함수에 도착하는 경로를 함수 자신의
+경로(`/api/index`)로 바꾼다. 빌드 로그도 그렇게 경고한다.
 
 ```
-create_git_project  → 403 You don't have permission to create the project.
-deploy_to_vercel    → 403 You don't have permission to create a project.
+WARNING! Internal rewrites in backend framework projects now route requests
+using the rewritten destination path.
 ```
 
-프로젝트 **조회**는 되는데 **생성**이 막혀 있다. 연결된 토큰에 프로젝트
-생성 권한이 없다.
+그래서 `/api/health` 요청이 라우터를 지나쳐 **정적 폴백**으로 빠졌고,
+폴백은 모르는 경로를 `index.html` 로 덮었다. 200 + HTML.
+→ 원래 경로를 `?__p=` 로 같이 넘기고, `route_path()` 가 그것으로 복원한다.
+→ 그리고 **`/api/*` 는 절대 HTML 로 덮지 않는다.** 모르면 404 + JSON 이다.
+   조용히 덮는 폴백이 "배포는 멀쩡한데 API 는 죽음"을 만든 진짜 원인이다.
 
-**푸는 방법 (둘 중 하나)**
+### 겹 2 — 진입 파일의 바이트코드가 빌드 캐시에 얼어붙는다
 
-1. Vercel 대시보드에서 프로젝트를 한 번 만든다
-   → New Project → `24h-gambler/hci_adhd_ai_delay` 가져오기
-   → 그 뒤로는 푸시할 때마다 자동 배포된다
-2. 이 저장소를 Vercel GitHub 앱 범위에 추가한다
-   (저장소가 최근에 만들어져 범위 밖일 수 있다)
+겹 1 을 고쳤는데도 세 번 연속 그대로였다. 빌드 로그 두 줄이 답이었다.
 
-프로젝트가 생기면 **설정은 이미 저장소에 들어 있다.** 추가 작업이 없다.
+```
+Restored build cache from previous deployment (...)
+Compiling Python bytecode...
+```
+
+Vercel 은 함수 **진입 파일**을 바이트코드로 컴파일해 빌드 캐시에 얹어
+재사용한다. `api/index.py` 에 넣은 수정이 배포되지 않고 **첫 배포본에
+얼어붙어 있었다.** 반면 `includeFiles` 로 실려가는 `app/**` 와
+`prompts/**` 는 매 빌드마다 새로 복사된다.
+
+배포본 하나를 두드렸더니 이런 404 가 나왔고, 여기서 확정됐다.
+
+```json
+{"error": "unknown_api_route", "route_path": "/api/index"}
+```
+
+본문 형식은 **방금 올린** `app/server.py` 것이고, `route_path` 값은
+**첫 판본** `api/index.py` 것이다. 한 배포본에서 같이 나올 수 없는 조합이다.
+
+**그래서 진입 파일에는 로직을 두지 않는다.**
+
+```
+app/server.py     라우팅·응답·진단 전부 (매 빌드 새로 복사됨)
+api/index.py      srv.Handler 를 상속해 exp 만 매다는 껍데기
+```
+
+첫 배포본 `api/index.py` 를 그대로 끼워 재현 검사했고, 모든 경로가 동일하게
+동작한다. 진입 파일이 낡은 채 실행돼도 상관없는 구조다.
+
+`app/tests/test_server.py · ServerlessRoutingTest` 가 이걸 지킨다. 특히
+마지막 검사는 **진입 파일의 `handler` 가 `log_message` 말고 다른 메서드를
+가지면 실패한다** (`ast` 로 확인). 로직을 진입 파일로 되돌리면 "배포는
+됐는데 반영은 안 되는" 상태로 돌아가기 때문이다.
+
+### 확인된 상태 (2026-09-18)
+
+```
+GET /api/health  →  200  {"ok": true}
+                    x-server-build: 2026-09-18.d4
+```
+
+`x-server-build` 값이 방금 올린 판본과 같다 = 라우팅이 살아 있고 최신
+코드가 돌고 있다.
+
+**프로덕션 주소는 아직 첫(고장난) 배포본이다.** 프로덕션은 `main` 을 따라가고
+이 수정은 아직 브랜치에 있다. `hciadhdaidelay.vercel.app` 을 쓰려면 PR 을
+합쳐야 한다. 그 전까지는 브랜치 미리보기 주소를 쓴다.
+
+### 연구자 화면은 배포본에서 비어 있다
+
+`GET /api/session/<id>/plan` 은 **메모리에 있는 세션만** 돌려준다. 서버리스는
+인스턴스가 매번 새로 뜨므로 계획표·안전 경보 이력이 비어 보인다.
+
+시드에서 계획을 복원하게 만들 수도 있지만 **일부러 하지 않았다.** 세션 ID를
+잘못 입력해도 그럴듯한 계획표가 `alerts: []` 과 함께 뜨기 때문이다. 안전
+경보를 지켜보는 화면에서 "경보 없음"과 "세션을 못 찾음"이 같아 보이면 안 된다.
+연구자 화면은 노트북 실행(`python3 app/server.py`)에서만 쓴다.
+
+### 배포본이 최신인지 확인하는 법
+
+모든 응답에 `X-Server-Build` 헤더가 붙는다 (`app/server.py: SERVER_BUILD`).
+빌드 로그를 뒤지지 않고 응답 하나로 확인한다.
+
+```
+curl -sI https://<배포주소>/api/health | grep -i x-server-build
+curl -s  https://<배포주소>/api/health          # {"ok": true} 여야 한다
+```
+
+`/api/health` 가 HTML 이면 라우팅이 깨진 것이고, 404 JSON 이면 경로가
+복원되지 않은 것이다. 둘 다 즉시 구분된다.
+
+## 🔒 지금은 Vercel 로그인 없이 못 연다
+
+```
+ssoProtection: enabled, deploymentType = all_except_custom_domains
+```
+
+**프로덕션 주소까지 포함해** 모든 vercel.app 주소가 Vercel 계정 로그인을
+요구한다. 다른 사람에게 링크를 보내 사용성 검사를 시키려면 꺼야 한다.
+
+> Vercel → 프로젝트 → Settings → Deployment Protection → Vercel Authentication 끄기
+
+**끄기 전에 확인할 것.** 이 앱은 기본값이 `mock` 제공자라 키가 없지만,
+나중에 `ANTHROPIC_API_KEY` 를 환경변수에 넣은 뒤 보호를 꺼 두면 **주소를
+아는 누구나 그 키로 모델을 호출**하게 된다. 실제 모델을 붙일 계획이라면
+보호를 켠 채로 두거나 비밀번호 보호로 바꾸는 편이 낫다.
 
 ### 환경변수 (실제 모델을 붙일 때)
 
