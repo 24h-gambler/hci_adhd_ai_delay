@@ -872,6 +872,34 @@ class ExpFallbackTest(unittest.TestCase):
         self.assertEqual(body["exp"], "fallback")
         self.assertEqual(body["server_build"], srv.SERVER_BUILD)
 
+    def test_log_dir_falls_back_when_the_tree_is_not_writable(self):
+        """★ 로그 디렉터리를 만들 수 없으면 /tmp 로 간다.
+
+        서버리스에서는 배포 트리가 읽기 전용이라 REPO_ROOT/logs 에 쓰려다
+        OSError 로 죽었다. 진입 파일이 HCI_LOG_DIR 을 넣어 주는 것에 기대면
+        안 된다 — 그 파일의 모듈 본문이 실행되지 않는 환경이 있다.
+
+        (검사는 root 로도 돌기 때문에 권한 비트 대신, 디렉터리를 만들 수
+         없는 자리를 써서 같은 OSError 를 만든다.)
+        """
+        os.environ.pop("HCI_LOG_DIR", None)
+        prev_root = srv.REPO_ROOT
+        self.addCleanup(lambda: setattr(srv, "REPO_ROOT", prev_root))
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        blocked = pathlib.Path(tmp.name) / "a-file"
+        blocked.write_text("", encoding="utf-8")
+
+        srv.REPO_ROOT = blocked                      # 파일 아래에는 mkdir 이 안 된다
+        self.assertEqual(srv.default_log_dir(), pathlib.Path("/tmp/hci-logs"))
+
+        srv.REPO_ROOT = pathlib.Path(tmp.name)       # 쓸 수 있으면 그대로 쓴다
+        self.assertEqual(srv.default_log_dir(), pathlib.Path(tmp.name) / "logs")
+
+        os.environ["HCI_LOG_DIR"] = tmp.name         # 지정돼 있으면 그것이 우선
+        self.assertEqual(srv.default_log_dir(), pathlib.Path(tmp.name))
+
     def test_session_start_works_without_a_bound_exp(self):
         # ★ 이것이 프로덕션에서 500 이던 바로 그 경로다.
         s = self._req("/api/session/start",
