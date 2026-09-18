@@ -223,10 +223,35 @@ class Experiment:
 # ────────────────────────────── HTTP ──────────────────────────────
 
 # 배포본 식별자. 응답 헤더 X-Server-Build 로 나간다.
-SERVER_BUILD = "2026-09-18.d5"
+SERVER_BUILD = "2026-09-18.d6"
 
 _FALLBACK_EXP = None
 _FALLBACK_LOCK = threading.Lock()
+
+
+def default_log_dir() -> Path:
+    """쓸 수 있는 로그 디렉터리를 스스로 고른다.
+
+    ★ 서버리스에서는 배포된 파일 트리가 읽기 전용이라 REPO_ROOT/logs 에
+      쓸 수 없다 (OSError: Read-only file system: '/var/task/logs').
+      쓸 수 있는 곳은 /tmp 뿐이다.
+
+      진입 파일(api/index.py)이 HCI_LOG_DIR 을 넣어 주길 기대하지 않는다.
+      그 파일의 모듈 본문이 실행되지 않는 환경이 있다는 것을 확인했다 —
+      exp 가 매달리지 않은 것과 같은 뿌리다.
+    """
+    env = os.environ.get("HCI_LOG_DIR")
+    if env:
+        return Path(env)
+    local = REPO_ROOT / "logs"
+    try:
+        local.mkdir(parents=True, exist_ok=True)
+        probe = local / ".write-probe"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+        return local
+    except OSError:
+        return Path("/tmp/hci-logs")
 
 
 def default_experiment() -> "Experiment":
@@ -248,7 +273,7 @@ def default_experiment() -> "Experiment":
             prov = llmmod.make_provider(
                 os.environ.get("HCI_PROVIDER", "mock"), cfg,
                 os.environ.get("HCI_MOCK_LATENCY", "fixed"), scale)
-            store = TurnStore(os.environ.get("HCI_LOG_DIR") or (REPO_ROOT / "logs"))
+            store = TurnStore(default_log_dir())
             _FALLBACK_EXP = Experiment(cfg, prov, store, scale)
         return _FALLBACK_EXP
 
@@ -340,6 +365,7 @@ class Handler(BaseHTTPRequestHandler):
             ready = exp is not None and exp.store is not None
         except Exception as e:                   # noqa: BLE001
             return {"ok": False, "server_build": SERVER_BUILD,
+                    "handler": type(self).__name__,
                     "exp": "error", "error": f"{type(e).__name__}: {e}"}
         return {"ok": bool(ready), "server_build": SERVER_BUILD,
                 "handler": type(self).__name__,
