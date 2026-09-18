@@ -18,7 +18,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
@@ -222,6 +222,10 @@ class Experiment:
 
 # ────────────────────────────── HTTP ──────────────────────────────
 
+# 배포본 식별자. 응답 헤더 X-Server-Build 로 나간다.
+SERVER_BUILD = "2026-09-18.d4"
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "hci-adhd-delay/0.1"
     exp: Experiment = None       # 클래스 속성으로 주입
@@ -249,12 +253,42 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── 라우팅 ──
     def _unrouted(self, path: str):
-        """라우터가 모르는 API 경로. 서브클래스가 진단 정보를 덧붙인다."""
-        return self._send(404, {"error": "unknown_api_route", "route_path": path})
+        """라우터가 모르는 API 경로. 정적 HTML 로 조용히 덮지 않는다."""
+        return self._send(404, {
+            "error": "unknown_api_route",
+            "route_path": path,
+            "raw_path": self.path,
+            "server_build": SERVER_BUILD,
+        })
+
+    def end_headers(self):
+        """어떤 응답이든 어느 판본이 만들었는지 헤더로 남긴다.
+        배포본을 두드렸을 때 '지금 도는 코드가 방금 올린 코드인지'를
+        로그를 뒤지지 않고 응답 하나로 확인할 수 있다."""
+        try:
+            self.send_header("X-Server-Build", SERVER_BUILD)
+        except Exception:                      # noqa: BLE001  진단이 응답을 깨선 안 된다
+            pass
+        super().end_headers()
 
     def route_path(self) -> str:
-        """라우팅에 쓸 경로. 배포 환경이 경로를 바꿔 넘기면 서브클래스가 덮어쓴다."""
-        return urlparse(self.path).path
+        """라우팅에 쓸 경로.
+
+        서버리스(Vercel)에서는 rewrite 가 함수에 도착하는 경로를 함수 자신의
+        경로(/api/index)로 바꿔 버린다. 그래서 vercel.json 이 원래 경로를
+        __p 쿼리로 같이 넘기고, 여기서 그것을 되살린다.
+
+        ★ 이 로직은 일부러 기반 클래스에 둔다. Vercel 은 함수 진입 파일의
+          바이트코드를 빌드 캐시에 얹어 재사용하기 때문에 api/index.py 가
+          첫 배포본에 얼어붙을 수 있다. 실제로 그 일이 일어났다 — 진입
+          파일에 넣은 수정이 세 번 연속 배포되지 않았다. app/ 아래 파일은
+          매 빌드마다 새로 복사되므로 여기 있는 코드는 항상 최신이다.
+        """
+        u = urlparse(self.path or "")
+        original = parse_qs(u.query).get("__p", [None])[0]
+        if original:
+            return original if original.startswith("/") else "/" + original
+        return u.path
 
     def do_GET(self):
         path = self.route_path()

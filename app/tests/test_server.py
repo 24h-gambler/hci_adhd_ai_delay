@@ -17,6 +17,7 @@
   (test_delay_scale_scales_every_condition_equally).
 """
 
+import ast
 import json
 import pathlib
 import sys
@@ -756,6 +757,53 @@ class DelayScaleTest(ServerCase):
     def test_scaled_levels_stay_distinct(self):
         self.assertLess(self.ranges["shallow_ms"], self.ranges["medium_ms"])
         self.assertLess(self.ranges["medium_ms"], self.ranges["deep_ms"])
+
+
+class ServerlessRoutingTest(ServerCase):
+    """Vercel rewrite 가 경로를 바꿔 넘겨도 라우터에 닿는지.
+
+    배경 — 배포본에서 /api/* 가 전부 200 + HTML 로 돌아온 사고가 있었다.
+    두 가지가 겹쳤다.
+      (1) rewrite 가 함수에 도착하는 경로를 /api/index 로 바꾼다.
+      (2) 정적 폴백이 모르는 경로를 index.html 로 덮었다.
+    배포는 성공으로 보이는데 API 가 통째로 죽어 있었다.
+    """
+
+    def test_original_path_is_restored_from_query(self):
+        self.assertEqual(json.loads(self.get("/api/index?__p=%2Fapi%2Fhealth")), {"ok": True})
+
+    def test_local_path_still_routes(self):
+        self.assertEqual(json.loads(self.get("/api/health")), {"ok": True})
+
+    def test_unknown_api_path_is_not_masked_by_html(self):
+        # ★ 200 + HTML 로 덮이면 배포가 멀쩡해 보인다. 404 + JSON 이어야 한다.
+        for path in ("/api/index", "/api/nope", "/api/index?__p=%2Fapi%2Fnope"):
+            with self.subTest(path=path):
+                body = json.loads(self.get(path, expect=404))
+                self.assertEqual(body["error"], "unknown_api_route")
+
+    def test_static_paths_are_untouched(self):
+        for path in ("/", "/api/index?__p=%2F"):
+            with self.subTest(path=path):
+                self.assertTrue(self.get(path).startswith(b"<!doctype html>"))
+
+    def test_routing_logic_lives_outside_the_vercel_entrypoint(self):
+        """★ 구조적 보장.
+
+        Vercel 은 함수 진입 파일의 바이트코드를 빌드 캐시에 얹어 재사용한다.
+        api/index.py 에 넣은 수정이 배포되지 않고 첫 배포본에 얼어붙는 일이
+        실제로 세 번 연속 일어났다. 그래서 라우팅·응답 로직은 app/server.py 에
+        두고 진입 파일은 상속만 한다. 여기에 다시 로직이 들어오면 실패한다.
+        """
+        src = (pathlib.Path(__file__).resolve().parents[2] / "api" / "index.py")
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+        cls = next(n for n in ast.walk(tree)
+                   if isinstance(n, ast.ClassDef) and n.name == "handler")
+        methods = {n.name for n in cls.body if isinstance(n, ast.FunctionDef)}
+        self.assertEqual(methods, {"log_message"},
+                         "진입 파일이 다시 로직을 갖고 있다. 빌드 캐시에 얼어붙으면 "
+                         "이 수정은 배포되지 않는다 — app/server.py 로 옮겨라: %s" % methods)
+
 
 
 
