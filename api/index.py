@@ -54,5 +54,28 @@ class handler(srv.Handler):        # noqa: N801  Vercel 규약
             return p if p.startswith("/") else "/" + p
         return u.path
 
+    def _diag(self):
+        """?__diag=1 이 붙으면 함수가 실제로 무엇을 받는지 그대로 돌려준다.
+
+        Vercel rewrite 가 경로/쿼리를 어떻게 넘기는지 추측하지 않고 확인한다.
+        """
+        import json as _json
+        body = _json.dumps({
+            "raw_path": self.path,
+            "route_path": self.route_path(),
+            "command": self.command,
+            "headers": {k.lower(): v for k, v in self.headers.items()},
+        }, ensure_ascii=False, indent=2).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if "__diag=" in (self.path or ""):
+            return self._diag()
+        return super().do_GET()
+
     def log_message(self, fmt, *a):
         pass
