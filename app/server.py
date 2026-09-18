@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import mimetypes
 import re
 import sys
@@ -109,7 +110,9 @@ class Experiment:
         with self._lock:
             sess = self._sessions.get(sid)
         if sess is None:
-            raise KeyError(f"알 수 없는 session_id: {sid}")
+            # 서버리스에서는 인스턴스가 매번 새로 뜬다. 계획은 시드 결정론이라
+            # session_id만으로 복원할 수 있고, 이력은 클라이언트가 보낸다.
+            sess = self._restore_session(sid, body)
         meta = self._conversation_meta(sess, conv)
         practice = conv == sched.PRACTICE_CONVERSATION_INDEX
 
@@ -172,6 +175,29 @@ class Experiment:
             "prompt_sha256": self._system_hash[depth], "model": result["model"],
             "turns_per_conversation": self.turns_per_conversation,
         }
+
+    def _restore_session(self, sid: str, body: dict) -> dict:
+        """메모리에 없는 세션을 session_id에서 복원한다 (무상태 배포용)."""
+        pid = str(sid).rsplit("-", 1)[0]
+        try:
+            plan = sched.session_plan(pid)
+        except ValueError as e:
+            raise KeyError(f"알 수 없는 session_id: {sid}") from e
+        sess = {
+            "session_id": sid, "participant_id": pid,
+            "group": body.get("group", "unspecified"),
+            "plan": plan, "history": {}, "alerts": [], "restored": True,
+        }
+        conv = int(body.get("conversation_index", 0))
+        # 클라이언트가 보낸 이력을 그 대화에만 넣는다 (대화 간 격리는 유지)
+        hist = body.get("history") or []
+        sess["history"][conv] = [
+            {"role": m.get("role"), "content": str(m.get("content", ""))}
+            for m in hist if m.get("role") in ("user", "assistant")
+        ]
+        with self._lock:
+            self._sessions[sid] = sess
+        return sess
 
     def _history_for(self, sess: dict, conv: int) -> list[dict]:
         """★ 대화 간 이력 격리 (CONTRACT P6). conv 키가 다르면 서로 섞이지 않는다."""
@@ -282,7 +308,7 @@ def build_server(port=0, provider="mock", log_dir=None, latency_mode="length",
     cfg = cfgmod.load_config(config_path or cfgmod.DEFAULT_CONFIG)
     # mock의 생성 시간도 지연 배율을 따라간다 (app/llm.py MockProvider 참조)
     prov = llmmod.make_provider(provider, cfg, latency_mode, delay_scale)
-    store = TurnStore(log_dir or (REPO_ROOT / "logs"))
+    store = TurnStore(log_dir or os.environ.get("HCI_LOG_DIR") or (REPO_ROOT / "logs"))
     exp = Experiment(cfg, prov, store, delay_scale)
     handler = type("BoundHandler", (Handler,), {"exp": exp})
     httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)

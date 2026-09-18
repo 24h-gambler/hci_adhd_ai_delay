@@ -122,6 +122,8 @@
     surveyShownTs: null,
     lastSubmit: Promise.resolve(),
     surveyPart: 1,
+    records: [],
+    surveys: [],
     endAutoTimer: null,
     endPending: false,
     doneReached: false
@@ -304,6 +306,7 @@
         break;
 
       case 'done':
+        if (D.downloadPanel) { D.downloadPanel.hidden = false; }
         finishSession();
         break;
 
@@ -423,6 +426,8 @@
     if (State.prevTurnId) {
       var tid = State.prevTurnId;
       State.prevTurnId = null;
+      var nrec = findRecord(tid);
+      if (nrec) { nrec.next_input_start_ts = ts; }
       post('/api/turn/next-input', { turn_id: tid, next_input_start_ts: ts })
         .catch(function (err) { console.error(err); });
     }
@@ -460,12 +465,23 @@
 
     post('/api/turn', {
       session_id: State.session.session_id,
+      participant_id: State.participantId,
+      group: State.group,
       conversation_index: State.conversationIndex,
       turn_index: turnIndex,
       text: text,
       user_input_start_ts: startTs,
-      user_input_submit_ts: submit
+      user_input_submit_ts: submit,
+      // 서버가 무상태일 수 있다 (서버리스). 이 대화의 이력만 함께 보낸다.
+      history: State.records
+        .filter(function (r) { return r.conversation_index === State.conversationIndex; })
+        .reduce(function (acc, r) {
+          acc.push({ role: 'user', content: r.user_input_text });
+          acc.push({ role: 'assistant', content: r.ai_response_text });
+          return acc;
+        }, [])
     }).then(function (res) {
+      recordTurn(res, submit, startTs, text, State.screen === 'practice');
       scheduleDisplay(res, submit);
     }).catch(function (err) {
       console.error(err);
@@ -487,6 +503,61 @@
   }
 
   /* --- 표시 예약 (계약 §7 그대로) -------------------------------- */
+
+  function recordTurn(res, submit, startTs, text, practice) {
+    var rec = {
+      session_id: State.session ? State.session.session_id : null,
+      participant_id: State.participantId,
+      group: State.group,
+      conversation_index: State.conversationIndex,
+      condition: res.condition, depth: res.depth,
+      turn_index: State.turnsSent, practice: !!practice,
+      user_input_start_ts: startTs, user_input_submit_ts: submit,
+      user_input_text: text, user_input_chars: text.length,
+      target_delay_ms: res.target_delay_ms,
+      llm_request_ts: res.llm_request_ts, llm_response_ts: res.llm_response_ts,
+      display_ts: null,
+      ai_response_text: res.reply, ai_response_chars: (res.reply || '').length,
+      next_input_start_ts: null,
+      safety_flag: !!res.safety_flag, manipulation_ok: null,
+      prompt_version: State.session ? State.session.prompt_version : null,
+      base_prompt_sha256: res.base_prompt_sha256,
+      prompt_sha256: res.prompt_sha256,
+      model: res.model, finish_reason: res.finish_reason,
+      delay_scale: State.session ? State.session.delay_scale : 1,
+      turn_id: res.turn_id
+    };
+    State.records.push(rec);
+    return rec;
+  }
+
+  function findRecord(turnId) {
+    for (var i = State.records.length - 1; i >= 0; i--) {
+      if (State.records[i].turn_id === turnId) { return State.records[i]; }
+    }
+    return null;
+  }
+
+  function buildJsonl() {
+    return State.records.map(function (r) {
+      var o = {}; Object.keys(r).forEach(function (k) { if (k !== 'turn_id') { o[k] = r[k]; } });
+      return JSON.stringify(o);
+    }).join('\n') + '\n';
+  }
+
+  function downloadLogs() {
+    var sid = (State.session && State.session.session_id) || 'session';
+    [[sid + '.turns.jsonl', buildJsonl()],
+     [sid + '.surveys.jsonl', State.surveys.map(function (s) { return JSON.stringify(s); }).join('\n') + '\n']
+    ].forEach(function (pair) {
+      var blob = new Blob([pair[1]], { type: 'application/x-ndjson' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = pair[0];
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+    });
+  }
 
   function scheduleDisplay(res, submit) {
     // deadline은 계약서 코드와 동일하게 클라이언트가 계산한다.
@@ -563,6 +634,13 @@
       bypass: p.bypass,
       manipulationOk: null
     });
+
+    var clientRec = findRecord(p.turnId);
+    if (clientRec) {
+      clientRec.display_ts = displayTs;
+      clientRec.manipulation_ok = !clientRec.safety_flag && !clientRec.practice
+        && clientRec.llm_response_ts <= clientRec.user_input_submit_ts + clientRec.target_delay_ms;
+    }
 
     var record = State.displayLog[State.displayLog.length - 1];
     var done = post('/api/turn/display', { turn_id: p.turnId, display_ts: displayTs })
@@ -839,6 +917,7 @@
       submitted_ts: nowMs(),
       responses: responses
     };
+    State.surveys.push(payload);
     var p = post('/api/survey', payload).catch(function (err) {
       console.error(err);
       // 참가자를 화면에 붙잡아 두지는 않는다. 대신 응답을 브라우저에 남겨
@@ -1278,6 +1357,7 @@
     D.surveyPartLine = $('survey-part-line');
     D.btnSurveyNext = $('btn-survey-next');
     D.btnDownload = $('btn-download');
+    if (D.btnDownload) { D.btnDownload.addEventListener('click', downloadLogs); }
     D.downloadPanel = $('download-panel');
     D.engagementBlock = $('engagement-block');
     D.engagementError = $('engagement-error');
