@@ -26,10 +26,20 @@ JOINER = "\n\n"
 # (PyYAML 의존을 피하기 위해 여기서 한 번 더 선언한다.
 #  yaml을 고치면 이 표도 같이 고친다 — verify_matches_yaml()이 검사한다.)
 COMPOSITION: dict[str, list[str]] = {
-    "context_a": ["system_common.txt", "system_safety.txt", "system_context_a.txt"],
-    "context_b": ["system_common.txt", "system_safety.txt", "system_context_b.txt"],
-    "context_b_L2": ["system_common.txt", "system_safety.txt", "system_context_b_L2.txt"],
+    # 조건 간 완전히 동일한 기반. 이 해시가 R1/R2/R3에서 같아야 한다.
+    "base":          ["system_common.txt", "system_safety.txt", "system_context.txt"],
+    # 턴마다 기반 뒤에 하나가 덧붙는다.
+    "depth_deep":    ["depth_deep.txt"],
+    "depth_medium":  ["depth_medium.txt"],
+    "depth_shallow": ["depth_shallow.txt"],
 }
+
+DEPTH_KEYS = ("depth_deep", "depth_medium", "depth_shallow")
+
+
+def system_for(depth: str) -> str:
+    """그 턴에 실제로 보낼 system 문자열 = 기반 + 깊이 지시."""
+    return build("base").rstrip() + JOINER + build(f"depth_{depth}").rstrip() + "\n"
 
 
 def build(key: str) -> str:
@@ -63,7 +73,7 @@ def verify_matches_yaml() -> list[str]:
     warnings = []
     for key, files in COMPOSITION.items():
         block = re.search(
-            rf"^\s{{2}}{re.escape(key)}:\s*\n((?:\s{{4}}-\s.*\n)+)", text, re.M
+            rf"^\s{{2}}{re.escape(key)}:[^\n]*\n((?:\s{{4}}-\s.*\n)+)", text, re.M
         )
         if not block:
             warnings.append(f"prompts.yaml에 composition.{key}가 없습니다")
@@ -110,11 +120,14 @@ def main() -> int:
 
     hashes = {k: sha256(v) for k, v in built.items()}
     print()
-    if hashes["context_a"] == hashes["context_b"]:
-        print("✗ 맥락 A와 B의 프롬프트가 동일합니다 — 맥락 조작이 성립하지 않습니다.")
+    print("기반(base) 해시는 R1/R2/R3에서 동일해야 한다 — 조건은 프롬프트를 바꾸지 않는다.")
+    print(f"  base            {hashes['base']}")
+    for d in ("deep", "medium", "shallow"):
+        print(f"  base+{d:<9}{sha256(system_for(d))}")
+    if len({sha256(system_for(d)) for d in ("deep", "medium", "shallow")}) != 3:
+        print("✗ 세 깊이의 프롬프트가 구별되지 않습니다.")
         return 1
-    print("✓ 맥락 A / B 프롬프트가 서로 다릅니다.")
-    print("  (지연 조건 3수준은 프롬프트를 공유하므로 같은 맥락 안에서 해시가 같아야 합니다.)")
+    print("✓ 세 깊이가 서로 다릅니다.")
 
     for w in verify_matches_yaml():
         print(f"⚠ {w}")

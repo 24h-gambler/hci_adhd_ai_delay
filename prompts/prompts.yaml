@@ -1,51 +1,52 @@
 # 시스템 프롬프트 조합 규칙 · 버전 고정
 #
-# 규칙:
-#   - 지연 조건(즉시/중간/긺)은 프롬프트에 아무 영향을 주지 않는다.
-#     같은 맥락 안에서 세 조건의 sha256은 반드시 같아야 한다.
-#   - 맥락 A와 B의 sha256은 반드시 달라야 한다.
-#   - 수정하면 version을 올리고, 이전 버전 데이터와 섞지 않는다.
+# 재설계: 지연 배치 3조건 (R1/R2/R3) — docs/13-redesign-delay-placement.md
+#   · 기반 프롬프트(base)는 세 조건에서 완전히 동일하다. 해시로 증명한다.
+#   · 턴마다 "이번 응답의 깊이" 지시만 덧붙인다 (깊음/보통/얕음).
+#   · 깊이는 (세션, 대화, 턴)으로 정해지며 사용자 입력과 무관하다.
 
-version: "v0.1"
+version: "v0.3"
 status: draft          # draft | pilot | locked
-locked_at: null        # 본 실험 시작 시 ISO8601 기록
+locked_at: null
 
 composition:
-  # 최종 system prompt = 아래 파일을 이 순서로 "\n\n"으로 이어 붙인 것
-  context_a:
+  # 기반 = 아래를 이 순서로 "\n\n"으로 이어 붙인 것. 조건 간 동일.
+  base:
     - system_common.txt
     - system_safety.txt
-    - system_context_a.txt
-  context_b:
-    - system_common.txt
-    - system_safety.txt
-    - system_context_b.txt        # 공감 수준 L1 (기본)
-  # 파일럿에서 맥락 조작이 약하면 아래로 교체한다 (OPEN_QUESTIONS Q6)
-  context_b_L2:
-    - system_common.txt
-    - system_safety.txt
-    - system_context_b_L2.txt
-
-empathy_level: L1      # L1 | L2  — 본 실험 시작 전 확정
+    - system_context.txt
+  # 턴마다 기반 뒤에 하나가 덧붙는다.
+  depth_deep:
+    - depth_deep.txt
+  depth_medium:
+    - depth_medium.txt
+  depth_shallow:
+    - depth_shallow.txt
 
 model:
-  # ⚠️ 실제 모델 ID와 버전을 여기에 박아 넣고 세션 로그에 그대로 남긴다.
+  # ⚠️ OPEN_QUESTIONS Q18 — 최신 Claude 모델은 temperature를 거부한다.
   id: "TBD"
-  temperature: 0.3
+  temperature: 0.6
   top_p: 1.0
-  max_tokens: 500        # 안전망. 길이는 프롬프트 규칙 2(300자)가 잡는다.
-                         # 300으로 두면 한국어 300자가 문장 중간에서 잘린다.
-  seed: 20260401       # 지원되는 모델이면 고정
-  stream: false        # ★ 반드시 false — materials/04 §6 참조
-
-delay_conditions:
-  # 프롬프트와 무관. 앱이 참조하는 값이며 여기 함께 두어 버전을 묶는다.
-  immediate: { min_ms: 1000,  max_ms:  2000 }
-  medium:    { min_ms: 8000,  max_ms:  9000 }
-  long:      { min_ms: 16000, max_ms: 20000 }
-  practice:  { fixed_ms: 800 }
+  max_tokens: 400      # 깊음 3~4문장을 자르지 않도록 여유. finish_reason 을 반드시 로깅
+  seed: 20260401
+  stream: false        # ★ 반드시 false
 
 conversation:
-  turns_per_conversation: 5
-  conversations_per_block: 3
-  blocks: 2
+  conversations: 3               # ★ 3블록이다. "6개"가 아니다
+  turns_per_conversation: 9      # 깊음 3 · 보통 3 · 얕음 3
+  reset_history_between_conversations: true
+
+# 지연 배치 — 세 조건의 다중집합이 동일하다 {15,15,15,8,8,8,3,3,3} 합 78초
+delay_placement:
+  deep_ms:    15000
+  medium_ms:   8000
+  shallow_ms:  3000
+  total_per_conversation_ms: 78000
+  conditions:
+    R1: { deep: deep_ms,    medium: medium_ms, shallow: shallow_ms }   # 깊을수록 길게
+    R2: { deep: shallow_ms, medium: medium_ms, shallow: deep_ms }      # 반대
+    R3: shuffled                                                       # 규칙 없음
+  practice_ms: 8000              # 연습은 중앙값. 앵커가 치우치지 않게
+
+indicator: none        # ★ 화면 표시 없음 — 넣으면 그게 해석 단서가 된다
