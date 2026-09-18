@@ -1130,7 +1130,7 @@
     var nowConv = live && live.session_id === RS.sessionId ? live.conversation_index : null;
 
     var practiceRow = document.createElement('tr');
-    ['0', '—', '—', 'practice (연습)', nowConv === 0 ? '진행 중' : (nowConv != null && nowConv > 0 ? '완료' : '대기')]
+    ['0', 'practice', '연습 (고정)', '1', nowConv === 0 ? '진행 중' : (nowConv != null && nowConv > 0 ? '완료' : '대기')]
       .forEach(function (t) { practiceRow.appendChild(el('td', null, t)); });
     if (nowConv === 0) { practiceRow.className = 'is-now'; }
     tbody.appendChild(practiceRow);
@@ -1142,7 +1142,8 @@
         else if (c.index < nowConv) { status = '완료'; }
       }
       var tr = document.createElement('tr');
-      [String(c.index), String(c.block), String(c.context), String(c.condition), status]
+      var PLACE = { R1: '깊음←길게', R2: '깊음←짧게', R3: '규칙 없음' };
+      [String(c.index), String(c.condition), PLACE[c.condition] || '—', String(c.turns || 9), status]
         .forEach(function (t) { tr.appendChild(el('td', null, t)); });
       if (c.index === nowConv) { tr.className = 'is-now'; }
       tbody.appendChild(tr);

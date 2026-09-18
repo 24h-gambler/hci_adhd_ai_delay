@@ -40,5 +40,19 @@ _exp = srv.Experiment(_cfg, _provider, _store,
 class handler(srv.Handler):        # noqa: N801  Vercel 규약
     exp = _exp
 
+    def route_path(self) -> str:
+        """★ Vercel rewrite 는 함수에 도착하는 경로를 /api/index 로 바꾼다.
+
+        그대로 두면 /api/health 같은 요청이 전부 정적 폴백으로 빠져
+        HTML 이 돌아온다. vercel.json 이 원래 경로를 __p 로 넘기므로
+        그것을 라우팅에 쓴다.
+        """
+        from urllib.parse import parse_qs, urlparse
+        u = urlparse(self.path)
+        p = parse_qs(u.query).get("__p", [None])[0]
+        if p:
+            return p if p.startswith("/") else "/" + p
+        return u.path
+
     def log_message(self, fmt, *a):
         pass

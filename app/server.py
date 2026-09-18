@@ -246,8 +246,12 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(n) or b"{}")
 
     # ── 라우팅 ──
+    def route_path(self) -> str:
+        """라우팅에 쓸 경로. 배포 환경이 경로를 바꿔 넘기면 서브클래스가 덮어쓴다."""
+        return urlparse(self.path).path
+
     def do_GET(self):
-        path = urlparse(self.path).path
+        path = self.route_path()
         m = re.fullmatch(r"/api/session/([^/]+)/plan", path)
         if m:
             try:
@@ -259,7 +263,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._static(path)
 
     def do_POST(self):
-        path = urlparse(self.path).path
+        path = self.route_path()
         try:
             if path == "/api/session/start":
                 b = self._body()
