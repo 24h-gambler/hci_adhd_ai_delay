@@ -13,6 +13,7 @@ Vercel Python 런타임은 `handler`(BaseHTTPRequestHandler 하위 클래스)를
 import os
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
@@ -37,45 +38,51 @@ _exp = srv.Experiment(_cfg, _provider, _store,
                       float(os.environ.get("HCI_DELAY_SCALE", "1.0")))
 
 
+# 배포된 어댑터 판본. 모든 응답 헤더에 실려 나가므로, 로그를 보지 않고도
+# "지금 돌고 있는 코드가 방금 올린 그 코드인지"를 응답 하나로 확인할 수 있다.
+ADAPTER_BUILD = "2026-09-18.d3"
+
+
 class handler(srv.Handler):        # noqa: N801  Vercel 규약
     exp = _exp
 
+    # ── 라우팅 ──
     def route_path(self) -> str:
         """★ Vercel rewrite 는 함수에 도착하는 경로를 /api/index 로 바꾼다.
 
-        그대로 두면 /api/health 같은 요청이 전부 정적 폴백으로 빠져
-        HTML 이 돌아온다. vercel.json 이 원래 경로를 __p 로 넘기므로
-        그것을 라우팅에 쓴다.
+        그대로 두면 /api/health 같은 요청이 전부 라우터를 지나친다.
+        vercel.json 이 원래 경로를 __p 로 넘기므로 그것을 라우팅에 쓴다.
+        __p 가 없는데 도착 경로가 함수 자신이면, 원래 경로를 복원할 방법이
+        없다는 뜻이다. 그때는 조용히 넘어가지 않고 그 사실이 드러나는
+        경로를 돌려준다 (아래 _unrouted 가 404 + 진단으로 받는다).
         """
-        from urllib.parse import parse_qs, urlparse
-        u = urlparse(self.path)
+        u = urlparse(self.path or "")
         p = parse_qs(u.query).get("__p", [None])[0]
         if p:
             return p if p.startswith("/") else "/" + p
+        if u.path in ("/api/index", "/api/index.py"):
+            return "/api/__unrouted"
         return u.path
 
-    def _diag(self):
-        """?__diag=1 이 붙으면 함수가 실제로 무엇을 받는지 그대로 돌려준다.
-
-        Vercel rewrite 가 경로/쿼리를 어떻게 넘기는지 추측하지 않고 확인한다.
-        """
-        import json as _json
-        body = _json.dumps({
+    def _unrouted(self, path: str):
+        return self._send(404, {
+            "error": "unknown_api_route",
+            "route_path": path,
             "raw_path": self.path,
-            "route_path": self.route_path(),
-            "command": self.command,
-            "headers": {k.lower(): v for k, v in self.headers.items()},
-        }, ensure_ascii=False, indent=2).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+            "adapter_build": ADAPTER_BUILD,
+        })
 
-    def do_GET(self):
-        if "__diag=" in (self.path or ""):
-            return self._diag()
-        return super().do_GET()
+    # ── 진단 ──
+    def end_headers(self):
+        """모든 응답에 판본과 경로를 붙인다. 정적 HTML 이 돌아오는 경우에도
+        어느 코드가 무엇을 보고 그렇게 판단했는지 헤더만 보면 된다."""
+        try:
+            self.send_header("X-Adapter-Build", ADAPTER_BUILD)
+            self.send_header("X-Raw-Path", (self.path or "")[:200])
+            self.send_header("X-Route-Path", self.route_path()[:200])
+        except Exception:                      # noqa: BLE001  진단이 응답을 깨선 안 된다
+            pass
+        super().end_headers()
 
     def log_message(self, fmt, *a):
         pass

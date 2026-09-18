@@ -227,7 +227,9 @@ class Handler(BaseHTTPRequestHandler):
     exp: Experiment = None       # 클래스 속성으로 주입
 
     def log_message(self, fmt, *a):            # 조용히
-        if self.server.verbose:
+        # self.server 는 실행 환경마다 다르다. 서버리스 어댑터가 띄우는 서버에는
+        # verbose 가 없어서 곧이곧대로 읽으면 send_response 안에서 터진다.
+        if getattr(self.server, "verbose", False):
             super().log_message(fmt, *a)
 
     # ── 유틸 ──
@@ -246,6 +248,10 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(n) or b"{}")
 
     # ── 라우팅 ──
+    def _unrouted(self, path: str):
+        """라우터가 모르는 API 경로. 서브클래스가 진단 정보를 덧붙인다."""
+        return self._send(404, {"error": "unknown_api_route", "route_path": path})
+
     def route_path(self) -> str:
         """라우팅에 쓸 경로. 배포 환경이 경로를 바꿔 넘기면 서브클래스가 덮어쓴다."""
         return urlparse(self.path).path
@@ -291,10 +297,15 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:                       # noqa: BLE001
             self.exp and None
             return self._send(500, {"error": f"{type(e).__name__}: {e}"})
-        return self._send(404, {"error": "not found"})
+        return self._unrouted(path)
 
     # ── 정적 파일 ──
     def _static(self, path: str):
+        # ★ API 경로는 절대 HTML 로 덮지 않는다.
+        #   라우팅이 깨졌을 때 정적 폴백이 200 + HTML 을 돌려주면 배포가
+        #   멀쩡해 보인다. 실제로 그렇게 API 가 통째로 죽은 채 지나갔다.
+        if path.startswith("/api/") or path == "/api":
+            return self._unrouted(path)
         rel = "index.html" if path in ("/", "") else path.lstrip("/")
         target = (STATIC_DIR / rel).resolve()
         if not str(target).startswith(str(STATIC_DIR.resolve())) or not target.is_file():
