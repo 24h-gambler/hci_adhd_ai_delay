@@ -223,12 +223,49 @@ class Experiment:
 # ────────────────────────────── HTTP ──────────────────────────────
 
 # 배포본 식별자. 응답 헤더 X-Server-Build 로 나간다.
-SERVER_BUILD = "2026-09-18.d4"
+SERVER_BUILD = "2026-09-18.d5"
+
+_FALLBACK_EXP = None
+_FALLBACK_LOCK = threading.Lock()
+
+
+def default_experiment() -> "Experiment":
+    """실행 환경이 exp 를 매달아 주지 않았을 때 쓰는 기본 실험 객체.
+
+    ★ 서버리스에서 필요하다. 진입 파일(api/index.py)이 클래스 속성으로
+      exp 를 매다는 방식이 Vercel 에서 먹히지 않았다 — self.exp 가 None 이라
+      /api/session/start 가 전부 500 이었다. 화면과 /api/health 는 exp 를
+      건드리지 않아 멀쩡해 보였고, 그래서 배포가 정상으로 읽혔다.
+
+      라우팅 때와 같은 교훈이다: 진입 파일은 빌드 캐시에 얼어붙을 수 있고
+      실행 방식도 환경마다 다르다. app/ 아래 코드가 스스로 설 수 있어야 한다.
+    """
+    global _FALLBACK_EXP
+    with _FALLBACK_LOCK:
+        if _FALLBACK_EXP is None:
+            cfg = cfgmod.load_config()
+            scale = float(os.environ.get("HCI_DELAY_SCALE", "1.0"))
+            prov = llmmod.make_provider(
+                os.environ.get("HCI_PROVIDER", "mock"), cfg,
+                os.environ.get("HCI_MOCK_LATENCY", "fixed"), scale)
+            store = TurnStore(os.environ.get("HCI_LOG_DIR") or (REPO_ROOT / "logs"))
+            _FALLBACK_EXP = Experiment(cfg, prov, store, scale)
+        return _FALLBACK_EXP
 
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "hci-adhd-delay/0.1"
     exp: Experiment = None       # 클래스 속성으로 주입
+
+    @property
+    def experiment(self) -> "Experiment":
+        """exp 가 매달려 있으면 그것, 아니면 모듈 기본값.
+
+        build_server 는 세션마다 만든 exp 를 클래스에 매단다(로컬 실행).
+        그게 없는 실행 환경(서버리스)에서는 기본값이 대신 선다.
+        """
+        exp = self.exp
+        return exp if exp is not None else default_experiment()
 
     def log_message(self, fmt, *a):            # 조용히
         # self.server 는 실행 환경마다 다르다. 서버리스 어댑터가 띄우는 서버에는
@@ -290,16 +327,38 @@ class Handler(BaseHTTPRequestHandler):
             return original if original.startswith("/") else "/" + original
         return u.path
 
+    def _health(self) -> dict:
+        """살아 있는지만이 아니라 **실험 객체가 서 있는지**까지 보고한다.
+
+        이 항목이 없어서 /api/health 는 200 인데 /api/session/start 는 전부
+        500 인 상태를 '정상 배포'로 읽었다. 배포 확인이 실제 기능을
+        건드리게 만든다.
+        """
+        bound = self.exp is not None
+        try:
+            exp = self.experiment
+            ready = exp is not None and exp.store is not None
+        except Exception as e:                   # noqa: BLE001
+            return {"ok": False, "server_build": SERVER_BUILD,
+                    "exp": "error", "error": f"{type(e).__name__}: {e}"}
+        return {"ok": bool(ready), "server_build": SERVER_BUILD,
+                "handler": type(self).__name__,
+                "exp": "bound" if bound else "fallback"}
+
     def do_GET(self):
         path = self.route_path()
         m = re.fullmatch(r"/api/session/([^/]+)/plan", path)
         if m:
             try:
-                return self._send(200, self.exp.plan(m.group(1)))
+                return self._send(200, self.experiment.plan(m.group(1)))
             except KeyError as e:
                 return self._send(404, {"error": str(e)})
+            except Exception as e:               # noqa: BLE001
+                # ★ 여기서 새어 나가면 Vercel 이 FUNCTION_INVOCATION_FAILED 로
+                #   덮어 버려서 원인이 응답에 남지 않는다.
+                return self._send(500, {"error": f"{type(e).__name__}: {e}"})
         if path == "/api/health":
-            return self._send(200, {"ok": True})
+            return self._send(200, self._health())
         return self._static(path)
 
     def do_POST(self):
@@ -307,29 +366,28 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/session/start":
                 b = self._body()
-                return self._send(200, self.exp.start_session(
+                return self._send(200, self.experiment.start_session(
                     b.get("participant_id", "P00"), b.get("group", "unspecified")))
             if path == "/api/turn":
-                return self._send(200, self.exp.turn(self._body()))
+                return self._send(200, self.experiment.turn(self._body()))
             if path == "/api/turn/display":
                 b = self._body()
-                out = self.exp.store.complete_display(b["turn_id"], int(b["display_ts"]))
+                out = self.experiment.store.complete_display(b["turn_id"], int(b["display_ts"]))
                 return self._send(200, {"ok": True, **out})
             if path == "/api/turn/next-input":
                 b = self._body()
-                self.exp.store.set_next_input(b["turn_id"], int(b["next_input_start_ts"]))
+                self.experiment.store.set_next_input(b["turn_id"], int(b["next_input_start_ts"]))
                 return self._send(200, {"ok": True})
             if path == "/api/survey":
                 b = self._body()
-                self.exp.store.write_survey(b)
+                self.experiment.store.write_survey(b)
                 return self._send(200, {"ok": True})
             m = re.fullmatch(r"/api/session/([^/]+)/end", path)
             if m:
-                return self._send(200, self.exp.store.close_session(m.group(1)))
+                return self._send(200, self.experiment.store.close_session(m.group(1)))
         except (KeyError, ValueError) as e:
             return self._send(400, {"error": f"{type(e).__name__}: {e}"})
         except Exception as e:                       # noqa: BLE001
-            self.exp and None
             return self._send(500, {"error": f"{type(e).__name__}: {e}"})
         return self._unrouted(path)
 
