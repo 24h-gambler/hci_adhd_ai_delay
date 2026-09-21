@@ -171,6 +171,40 @@ python3 app/server.py --port 8000 --provider anthropic     # 실제 모델
 
 미완성 턴을 `display_ts: null`로 마감하고 로그를 닫는다.
 
+### `GET /api/health`
+
+배포본이 **실제로 쓸 수 있는 상태인지** 돌려준다.
+
+```json
+{"ok": true, "server_build": "2026-09-18.d6", "handler": "Handler", "exp": "fallback"}
+```
+
+| 필드 | 뜻 |
+| --- | --- |
+| `ok` | 실험 객체가 서 있는가. 이것이 false면 실험 경로가 전부 죽어 있다 |
+| `server_build` | 도는 코드의 판본. 응답 헤더 `X-Server-Build` 와 같다 |
+| `handler` | 실행 환경이 띄운 핸들러 클래스 이름 |
+| `exp` | `bound`(환경이 매달아 줌) · `fallback`(서버가 스스로 세움) · `error`(+ 이유) |
+
+★ **살아 있다는 것만 보고하면 안 된다.** 배포본이 `{"ok": true}` 만
+돌려주던 동안 실험 기능은 통째로 500이었고, 그 확인이 사고를 세 번
+통과시켰다. health는 반드시 실험 객체를 건드린 결과를 실어야 한다.
+
+### 서버는 혼자 설 수 있어야 한다
+
+배포 환경(Vercel)은 진입 파일 `api/index.py` 를 실행하지 않는다.
+거기서 매단 `exp` 도, 넣은 환경변수도 서버에 닿지 않는다. 그래서
+`app/server.py` 가 세 가지를 스스로 해결한다.
+
+| 함수 | 없을 때 무슨 일이 났었나 |
+| --- | --- |
+| `route_path()` | `/api/*` 가 전부 200 + HTML |
+| `default_experiment()` | 실험 경로가 전부 500 |
+| `default_log_dir()` | 읽기 전용 파일 시스템 OSError |
+
+`app/tests/test_server.py · ExpFallbackTest` 가 `exp` 를 매달지 않은
+`Handler` 를 그대로 띄워 이 성질을 상시 검사한다.
+
 ---
 
 ## 3. 로그 스키마 (JSONL, 한 줄 = 한 턴)

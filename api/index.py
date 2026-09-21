@@ -7,17 +7,26 @@
     깨질 수 있다. 그런 턴은 manipulation_ok=false 로 남는다.
   · 실제 세션은 노트북에서 `python3 app/server.py` 로 돌린다.
 
-★★ 이 파일에는 로직을 넣지 않는다.
+★★ 이 파일에는 로직을 넣지 않는다. 아무것도 기대하지 마라.
 
 Vercel 은 함수 진입 파일을 바이트코드로 컴파일해 **빌드 캐시에 얹어
 재사용한다** (빌드 로그: "Restored build cache from previous deployment" +
 "Compiling Python bytecode"). 그래서 이 파일에 넣은 수정이 배포되지 않고
 첫 배포본에 얼어붙는 일이 실제로 일어났다 — 세 번 연속으로.
 
+더 나아가, 배포본을 두드려 보면 **이 파일이 아예 실행되지 않는다.**
+  /api/health → {"handler": "Handler", "exp": "fallback"}
+`Handler` 는 app/server.py 의 클래스다. 여기서 정의한 handler(소문자)가
+아니다. 그래서 여기서 매단 exp 도, os.environ.setdefault 로 넣은
+HCI_LOG_DIR 도 서버에 닿지 않았다 — 실험 경로가 전부 500 이었고, 고친
+뒤에는 읽기 전용 파일 시스템에서 죽었다.
+
 반면 vercel.json 의 includeFiles 로 실려가는 app/** 와 prompts/** 는 매
-빌드마다 새로 복사된다. 그래서 라우팅·응답 로직은 전부 app/server.py 의
-Handler 에 두고, 여기서는 그 클래스를 상속해 exp 만 매단다. 이 파일이
-낡은 채로 실행돼도 동작이 달라지지 않는다.
+빌드마다 새로 복사되고, 실제로 실행되는 것도 그쪽이다. 그래서 라우팅·
+실험 객체·로그 경로를 전부 app/server.py 가 스스로 해결한다.
+  route_path() · default_experiment() · default_log_dir()
+이 파일은 Vercel 규약을 만족시키는 껍데기로만 둔다. 낡은 채로 실행되든,
+아예 실행되지 않든 동작이 같다.
 """
 
 import os
