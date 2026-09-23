@@ -36,8 +36,10 @@ body {
   font-family: system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic",
                "Noto Sans KR", "Nanum Gothic", sans-serif;
   font-size: 17px;
-  line-height: 1.7;
+  line-height: 1.8;
   -webkit-text-size-adjust: 100%;
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
 [hidden] { display: none !important; }
@@ -289,6 +291,35 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
   color: var(--ink-3);
 }
 .chat-counter { margin-left: 6px; font-variant-numeric: tabular-nums; }
+.chat-stop { margin: 8px 0 0; text-align: right; }
+
+/* 시간 추정 숫자 입력 */
+#q-time { width: 5em; padding: 8px 10px; font-size: 17px; }
+
+/* 짝지은 회상 (연구자 화면) */
+.rs-recall-pair { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin: 0 0 12px; }
+.rs-recall-card { background: var(--surface); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+.rs-recall-meta { font-weight: 700; margin: 0 0 6px; }
+.rs-recall-turn { border-top: 1px solid var(--line); padding: 8px 0; }
+@media print {
+  .rs-bar, .rs-card { break-inside: avoid; }
+}
+
+/* 테스트용 임시 패널 (?test=1 전용 — 실세션 노출 금지) */
+#test-panel {
+  position: fixed; right: 12px; bottom: 12px; z-index: 9999;
+  background: #111; color: #ffd75e; border: 2px dashed #ffd75e;
+  border-radius: 10px; padding: 10px 12px; max-width: 280px;
+  font-size: 14px;
+}
+#test-panel strong { display: block; margin-bottom: 6px; }
+#test-log { margin-bottom: 8px; word-break: break-word; }
+#test-panel .btn { margin: 2px 4px 2px 0; }
+#test-dash {
+  margin: 8px 0; padding: 8px; border: 1px solid #ffd75e; border-radius: 6px;
+  font-size: 13px; line-height: 1.6; white-space: pre-wrap;
+  word-break: keep-all; max-height: 220px; overflow-y: auto;
+}
 
 .chat-log {
   flex: 1 1 auto;
@@ -310,8 +341,9 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
   padding: 12px 16px;
   border-radius: 12px;
   white-space: pre-wrap;
-  word-break: break-word;
-  line-height: 1.75;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  line-height: 1.8;
 }
 .msg-user { justify-content: flex-end; }
 .msg-user .bubble {
@@ -464,8 +496,19 @@ fieldset.q legend {
   min-width: 44px;
 }
 .tick:hover { background: var(--surface-2); }
-.tick input { width: 20px; height: 20px; margin: 0; }
+.tick input { width: 22px; height: 22px; margin: 0; }
 .tick span { font-size: 15px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 640px) {
+  .scale { flex-direction: column; align-items: stretch; gap: 8px; }
+  .scale .anchor { width: auto; }
+  .scale .anchor.right { text-align: left; }
+  .ticks { gap: 2px; }
+  .tick { min-width: 0; padding: 4px 2px; }
+  .topic-card { padding: 24px 20px; }
+  .topic-card-body { font-size: 19px; }
+  .col { padding: 24px 16px 48px; }
+}
 
 /* ---------- 안전 오버레이 ---------- */
 

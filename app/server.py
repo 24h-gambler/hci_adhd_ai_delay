@@ -148,6 +148,7 @@ class Experiment:
             "turn_index": turn_index, "practice": practice,
             "user_input_start_ts": start_ts, "user_input_submit_ts": submit_ts,
             "user_input_text": text, "user_input_chars": len(text),
+            "queued_during_wait": bool(body.get("queued_during_wait", False)),
             "target_delay_ms": target,
             "llm_request_ts": result["request_ts"], "llm_response_ts": result["response_ts"],
             "ai_response_text": result["text"], "ai_response_chars": len(result["text"]),
@@ -223,7 +224,7 @@ class Experiment:
 # ────────────────────────────── HTTP ──────────────────────────────
 
 # 배포본 식별자. 응답 헤더 X-Server-Build 로 나간다.
-SERVER_BUILD = "2026-09-18.d6"
+SERVER_BUILD = "2026-09-23.strict1"
 
 _FALLBACK_EXP = None
 _FALLBACK_LOCK = threading.Lock()
@@ -383,6 +384,20 @@ class Handler(BaseHTTPRequestHandler):
                 # ★ 여기서 새어 나가면 Vercel 이 FUNCTION_INVOCATION_FAILED 로
                 #   덮어 버려서 원인이 응답에 남지 않는다.
                 return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+        mt = re.fullmatch(r"/api/session/([^/]+)/turns", path)
+        if mt:
+            try:
+                sid = mt.group(1)
+                with self.experiment._lock:
+                    known = sid in self.experiment._sessions
+                turns = self.experiment.store.session_turns(sid)
+                if not known and not turns:
+                    raise KeyError(sid)
+                return self._send(200, {"turns": turns})
+            except KeyError as e:
+                return self._send(404, {"error": str(e)})
+            except Exception as e:               # noqa: BLE001
+                return self._send(500, {"error": f"{type(e).__name__}: {e}"})
         if path == "/api/health":
             return self._send(200, self._health())
         return self._static(path)
@@ -407,6 +422,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/survey":
                 b = self._body()
                 self.experiment.store.write_survey(b)
+                return self._send(200, {"ok": True})
+            if path == "/api/event":
+                b = self._body()
+                for k in ("session_id", "kind", "ts"):
+                    if k not in b or b[k] is None or (isinstance(b[k], str) and not b[k]):
+                        raise ValueError(f"missing field: {k}")
+                self.experiment.store.write_event(b)
                 return self._send(200, {"ok": True})
             m = re.fullmatch(r"/api/session/([^/]+)/end", path)
             if m:
@@ -468,7 +490,7 @@ def main() -> int:
                          a.config, a.delay_scale, a.verbose)
     host, port = httpd.server_address
     if a.delay_scale != 1.0:
-        print(f"⚠️  delay_scale={a.delay_scale} — 축소된 지연입니다. 본 실험용이 아닙니다.")
+        print("delay_scale=%s -- scaled delays, NOT for real sessions." % a.delay_scale)
     print(f"제공자={a.provider}  지연배율={a.delay_scale}  로그={a.log_dir}")
     print(f"http://{host}:{port}/  (연구자 화면: http://{host}:{port}/?researcher=1)")
     sys.stdout.flush()

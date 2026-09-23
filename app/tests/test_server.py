@@ -931,5 +931,63 @@ class ExpFallbackTest(unittest.TestCase):
 
 
 
+class EventAndRecallTest(ServerCase):
+    """B3/B4/B5/B8 이벤트 로그 · 회상용 turns 조회 · B9 종료 합산."""
+
+    def test_event_is_appended_to_events_file(self):
+        s = self.new_session("P01")
+        payload = {"session_id": s["session_id"], "kind": "B3",
+                   "ts": 1800000000000, "detail": "attention-lost"}
+        out = self.post("/api/event", payload)
+        self.assertEqual(out, {"ok": True})
+        path = self.log_dir / ("%s.events.jsonl" % s["session_id"])
+        self.assertTrue(path.is_file(), "logs/{session_id}.events.jsonl")
+        rows = [json.loads(l) for l in
+                path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "B3")
+        self.assertEqual(rows[0]["ts"], 1800000000000)
+        # 필수값이 빠지면 400
+        self.post("/api/event", {"session_id": s["session_id"], "kind": "B3"}, expect=400)
+
+    def test_turns_endpoint_returns_session_turns(self):
+        s = self.new_session("P01")
+        conv = s["conversations"][0]
+        self.turn_and_display(s, conv["index"], 1, BENIGN[0])
+        body = json.loads(self.get("/api/session/%s/turns" % s["session_id"]))
+        self.assertIn("turns", body)
+        self.assertEqual(len(body["turns"]), 1)
+        self.assertEqual(body["turns"][0]["conversation_index"], conv["index"])
+        # 없는 세션은 404 (plan과 같은 패턴)
+        self.get("/api/session/NOPE/turns", expect=404)
+
+    def test_close_session_returns_conversation_totals(self):
+        s = self.new_session("P01")
+        conv = s["conversations"][0]
+        t1 = self.send_turn(s, conv["index"], 1, BENIGN[0])
+        self.display(t1)
+        t2 = self.send_turn(s, conv["index"], 2, BENIGN[1])
+        # t2는 표시하지 않는다 — observed에서 제외되어야 한다
+        out = self.post("/api/session/%s/end" % s["session_id"], {})
+        self.assertIn("conversations", out)
+        self.assertIn("session_target_total_ms", out)
+        self.assertIn("path", out)
+        key = next(k for k in out["conversations"]
+                   if str(k) == str(conv["index"]))
+        entry = out["conversations"][key]
+        for k in ("target_total_ms", "observed_total_ms", "n_turns", "n_shown"):
+            self.assertIn(k, entry)
+        self.assertEqual(entry["n_turns"], 2)
+        self.assertEqual(entry["n_shown"], 1)
+        rows = self.log_rows(s)
+        exp_target = sum(r["target_delay_ms"] for r in rows)
+        self.assertEqual(entry["target_total_ms"], exp_target)
+        self.assertEqual(out["session_target_total_ms"], exp_target)
+        shown = [r for r in rows if r["display_ts"] is not None][0]
+        self.assertEqual(entry["observed_total_ms"],
+                         shown["display_ts"] - shown["user_input_submit_ts"])
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

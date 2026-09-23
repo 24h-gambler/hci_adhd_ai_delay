@@ -40,9 +40,25 @@ function shuffled(items, sessionId, ...parts) {
   }
   return out;
 }
+function maxRun(items) {
+  let best = 1, cur = 1;
+  for (let i = 1; i < items.length; i++) {
+    cur = items[i] === items[i - 1] ? cur + 1 : 1;
+    if (cur > best) best = cur;
+  }
+  return best;
+}
 function depthSequence(sessionId, conv) {
-  return shuffled(['deep', 'deep', 'deep', 'medium', 'medium', 'medium',
-                   'shallow', 'shallow', 'shallow'], sessionId, conv, 'depth');
+  const pool = ['deep', 'deep', 'deep', 'medium', 'medium', 'medium',
+                'shallow', 'shallow', 'shallow'];
+  let attempt = 0;
+  for (;;) {
+    const extra = attempt === 0 ? [] : [`retry${attempt}`];
+    const seq = shuffled(pool, sessionId, conv, 'depth', ...extra);
+    if (maxRun(seq) <= 2) return seq;
+    attempt++;
+    if (attempt > 50) return seq;
+  }
 }
 function delaySequence(sessionId, conv, condition, ms) {
   const depths = depthSequence(sessionId, conv);
