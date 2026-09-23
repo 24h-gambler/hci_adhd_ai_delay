@@ -303,6 +303,17 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
   .rs-bar, .rs-card { break-inside: avoid; }
 }
 
+/* 테스트용 임시 패널 (?test=1 전용 — 실세션 노출 금지) */
+#test-panel {
+  position: fixed; right: 12px; bottom: 12px; z-index: 9999;
+  background: #111; color: #ffd75e; border: 2px dashed #ffd75e;
+  border-radius: 10px; padding: 10px 12px; max-width: 280px;
+  font-size: 14px;
+}
+#test-panel strong { display: block; margin-bottom: 6px; }
+#test-log { margin-bottom: 8px; word-break: break-word; }
+#test-panel .btn { margin: 2px 4px 2px 0; }
+
 .chat-log {
   flex: 1 1 auto;
   overflow-y: auto;

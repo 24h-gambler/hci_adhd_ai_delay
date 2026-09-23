@@ -47,6 +47,8 @@
     indicator: 'none',
     progress: false,
     e2e: params.get('e2e') === '1',
+    // ★ 테스트용 임시 패널. ?test=1 일 때만 뜬다. 실세션에서는 절대 쓰지 않는다.
+    test: params.get('test') === '1',
     researcher: params.get('researcher') === '1' || /\/researcher\/?$/.test(location.pathname)
   };
 
@@ -1389,6 +1391,93 @@
     });
   }
 
+  /* ==========================================================
+     14c. TEST PANEL (?test=1 only, never in real sessions)
+     ========================================================== */
+
+  var TEST_MSGS = [
+    'MSG-A', 'MSG-BB', 'MSG-CCC', 'MSG-DDDD', 'MSG-EEEEE',
+    'MSG-FFFFFF', 'MSG-GGGGGGG', 'MSG-HHHHHHHH', 'MSG-IIIIIIIII'
+  ];
+  var testAuto = { running: false, mi: 0 };
+
+  function testLog(msg) {
+    var box = $('test-log');
+    if (box) { box.textContent = msg; }
+  }
+
+  function installTestPanel() {
+    var panel = document.createElement('div');
+    panel.id = 'test-panel';
+    panel.appendChild(el('strong', null, 'TEST ONLY (real session ban)'));
+    var log = el('div', null, 'idle');
+    log.id = 'test-log';
+    panel.appendChild(log);
+    function btn(label, fn) {
+      var b = el('button', 'btn btn-small', label);
+      b.type = 'button';
+      b.addEventListener('click', fn);
+      panel.appendChild(b);
+      return b;
+    }
+    btn('fill survey', function () {
+      if (!window.__exp) { return testLog('no session'); }
+      window.__exp.fillSurvey().then(
+        function () { testLog('survey submitted'); },
+        function (e) { testLog('survey fail: ' + (e && e.message ? e.message : e)); });
+    });
+    btn('next', function () {
+      if (!window.__exp) { return testLog('no session'); }
+      testLog(window.__exp.advance() ? 'advanced' : 'no button');
+    });
+    btn('send msg', function () {
+      if (!window.__exp) { return testLog('no session'); }
+      var st = window.__exp.state();
+      var text = TEST_MSGS[testAuto.mi++ % TEST_MSGS.length] + ' (' + st.conversationIndex + '-' + (st.turnIndex + 1) + ')';
+      window.__exp.send(text).then(
+        function () { testLog('shown'); },
+        function (e) { testLog('send fail: ' + (e && e.message ? e.message : e)); });
+    });
+    btn('auto-run', function () { testAutoRun(); });
+    btn('stop auto', function () { testAuto.running = false; testLog('stop requested'); });
+    btn('download logs', function () { downloadLogs(); testLog('downloading'); });
+    document.body.appendChild(panel);
+  }
+
+  function testAutoRun() {
+    if (testAuto.running) { return; }
+    if (!window.__exp) { testLog('no session'); return; }
+    testAuto.running = true;
+    testLog('auto-run started');
+    (function step() {
+      if (!testAuto.running) { testLog('stopped'); return; }
+      var st;
+      try { st = window.__exp.state(); } catch (e) { testAuto.running = false; testLog('state fail'); return; }
+      var isDone = false;
+      try { isDone = window.__exp.done(); } catch (e) { isDone = false; }
+      Promise.resolve(isDone).then(function (done) {
+        if (done || !testAuto.running) { testAuto.running = false; testLog(done ? 'DONE' : 'stopped'); return; }
+        if (st.screen === 'chat' || st.screen === 'practice') {
+          var text = TEST_MSGS[testAuto.mi++ % TEST_MSGS.length];
+          window.__exp.send(text + ' (' + st.conversationIndex + '-' + (st.turnIndex + 1) + ')').then(
+            function () { testLog('conv' + st.conversationIndex + ' turn' + (st.turnIndex + 1)); setTimeout(step, 120); },
+            function (e) {
+              var m = String((e && e.message) || e);
+              if (m.indexOf('끝났') >= 0 || m.indexOf('이전') >= 0 || m.indexOf('아닙니다') >= 0) {
+                window.__exp.advance(); setTimeout(step, 250);
+              } else { testAuto.running = false; testLog('send fail: ' + m); }
+            });
+        } else if (st.screen === 'survey' || st.screen === 'engagement') {
+          window.__exp.fillSurvey().then(
+            function () { testLog('survey submitted'); setTimeout(step, 250); },
+            function (e) { testAuto.running = false; testLog('survey fail: ' + String((e && e.message) || e)); });
+        } else {
+          window.__exp.advance(); setTimeout(step, 250);
+        }
+      });
+    })();
+  }
+
 /* ==========================================================
      15. e2e 훅 (?e2e=1) — 프로덕션 흐름을 바꾸지 않는다.
         실제 클릭과 같은 경로를 그대로 밟는다.
@@ -1689,7 +1778,8 @@
       });
     }
 
-    if (OPT.e2e) { installE2E(); }
+    if (OPT.e2e || OPT.test) { installE2E(); }
+    if (OPT.test) { installTestPanel(); }
   }
 
   if (document.readyState === 'loading') {
