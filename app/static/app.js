@@ -1466,8 +1466,6 @@
         function () { testLog('표시됨'); },
         function (e) { testLog('전송 실패: ' + (e && e.message ? e.message : e)); });
     });
-    btn('끝까지 자동주행', function () { testAutoRun(); });
-    btn('자동주행 중지', function () { testAuto.running = false; testLog('중지 요청됨'); });
     btn('로그 내려받기', function () { downloadLogs(); testLog('내려받기 실행'); });
     var dash = el('div', null, '');
     dash.id = 'test-dash';
@@ -1514,40 +1512,6 @@
       }
     }
     box.textContent = lines.join('\n');
-  }
-
-  function testAutoRun() {
-    if (testAuto.running) { return; }
-    if (!window.__exp) { testLog('세션 없음'); return; }
-    testAuto.running = true;
-    testLog('자동주행 시작…');
-    (function step() {
-      if (!testAuto.running) { testLog('중지됨'); return; }
-      var st;
-      try { st = window.__exp.state(); } catch (e) { testAuto.running = false; testLog('상태 실패'); return; }
-      var isDone = false;
-      try { isDone = window.__exp.done(); } catch (e) { isDone = false; }
-      Promise.resolve(isDone).then(function (done) {
-        if (done || !testAuto.running) { testAuto.running = false; testLog(done ? '완료!' : '중지됨'); return; }
-        if (st.screen === 'chat' || st.screen === 'practice') {
-          var text = TEST_MSGS[testAuto.mi++ % TEST_MSGS.length];
-          window.__exp.send(text + ' (' + st.conversationIndex + '-' + (st.turnIndex + 1) + ')').then(
-            function () { testLog('대화' + st.conversationIndex + ' ' + (st.turnIndex + 1) + '턴 표시'); setTimeout(step, 120); },
-            function (e) {
-              var m = String((e && e.message) || e);
-              if (m.indexOf('끝났') >= 0 || m.indexOf('이전') >= 0 || m.indexOf('아닙니다') >= 0) {
-                window.__exp.advance(); setTimeout(step, 250);
-              } else { testAuto.running = false; testLog('전송 실패: ' + m); }
-            });
-        } else if (st.screen === 'survey' || st.screen === 'engagement') {
-          window.__exp.fillSurvey().then(
-            function () { testLog('설문 제출됨'); setTimeout(step, 250); },
-            function (e) { testAuto.running = false; testLog('설문 실패: ' + String((e && e.message) || e)); });
-        } else {
-          window.__exp.advance(); setTimeout(step, 250);
-        }
-      });
-    })();
   }
 
 /* ==========================================================
