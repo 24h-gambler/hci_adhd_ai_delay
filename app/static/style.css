@@ -289,6 +289,19 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
   color: var(--ink-3);
 }
 .chat-counter { margin-left: 6px; font-variant-numeric: tabular-nums; }
+.chat-stop { margin: 8px 0 0; text-align: right; }
+
+/* 시간 추정 숫자 입력 */
+#q-time { width: 5em; padding: 8px 10px; font-size: 17px; }
+
+/* 짝지은 회상 (연구자 화면) */
+.rs-recall-pair { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin: 0 0 12px; }
+.rs-recall-card { background: var(--surface); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+.rs-recall-meta { font-weight: 700; margin: 0 0 6px; }
+.rs-recall-turn { border-top: 1px solid var(--line); padding: 8px 0; }
+@media print {
+  .rs-bar, .rs-card { break-inside: avoid; }
+}
 
 .chat-log {
   flex: 1 1 auto;

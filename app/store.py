@@ -48,6 +48,9 @@ class TurnStore:
     def surveys_path(self, session_id: str) -> Path:
         return self.dir / f"{session_id}.surveys.jsonl"
 
+    def events_path(self, session_id: str) -> Path:
+        return self.dir / f"{session_id}.events.jsonl"
+
     # ── 쓰기 ──
     def _flush(self, session_id: str) -> None:
         """원자적으로 파일 전체를 다시 쓴다."""
@@ -117,11 +120,46 @@ class TurnStore:
             with self.surveys_path(record["session_id"]).open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+    def write_event(self, record: dict) -> None:
+        """B3/B4/B5/B8 등 세션 이벤트를 그대로 append한다."""
+        with self._lock:
+            with self.events_path(record["session_id"]).open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def session_turns(self, session_id: str) -> list[dict]:
+        """해당 세션 턴 레코드 리스트 복사본 (회상 화면용)."""
+        with self._lock:
+            return [dict(r) for r in self._turns.get(session_id, [])]
+
     def close_session(self, session_id: str) -> dict:
-        """미완성 턴을 그대로 두고(display_ts=None) 파일을 확정한다."""
+        """미완성 턴을 그대로 두고(display_ts=None) 파일을 확정한다.
+
+        B9: 대화별 합산을 함께 돌려준다. observed는 display_ts가 있는
+        턴만 display-submit 합에 넣는다 (미표시 제외).
+        """
         with self._lock:
             recs = self._turns.get(session_id, [])
             incomplete = sum(1 for r in recs if r.get("display_ts") is None)
+            conversations: dict = {}
+            session_target_total_ms = 0
+            by_conv: dict = {}
+            for r in recs:
+                by_conv.setdefault(r.get("conversation_index"), []).append(r)
+            for ci, rows in by_conv.items():
+                target_total = sum(int(r.get("target_delay_ms") or 0) for r in rows)
+                observed_total = sum(
+                    int(r["display_ts"] - r["user_input_submit_ts"])
+                    for r in rows if r.get("display_ts") is not None
+                )
+                conversations[ci] = {
+                    "target_total_ms": target_total,
+                    "observed_total_ms": observed_total,
+                    "n_turns": len(rows),
+                    "n_shown": sum(1 for r in rows if r.get("display_ts") is not None),
+                }
+                session_target_total_ms += target_total
             self._flush(session_id)
             return {"turns": len(recs), "incomplete": incomplete,
-                    "path": str(self.turns_path(session_id))}
+                    "path": str(self.turns_path(session_id)),
+                    "conversations": conversations,
+                    "session_target_total_ms": session_target_total_ms}

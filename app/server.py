@@ -384,6 +384,20 @@ class Handler(BaseHTTPRequestHandler):
                 # ★ 여기서 새어 나가면 Vercel 이 FUNCTION_INVOCATION_FAILED 로
                 #   덮어 버려서 원인이 응답에 남지 않는다.
                 return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+        mt = re.fullmatch(r"/api/session/([^/]+)/turns", path)
+        if mt:
+            try:
+                sid = mt.group(1)
+                with self.experiment._lock:
+                    known = sid in self.experiment._sessions
+                turns = self.experiment.store.session_turns(sid)
+                if not known and not turns:
+                    raise KeyError(sid)
+                return self._send(200, {"turns": turns})
+            except KeyError as e:
+                return self._send(404, {"error": str(e)})
+            except Exception as e:               # noqa: BLE001
+                return self._send(500, {"error": f"{type(e).__name__}: {e}"})
         if path == "/api/health":
             return self._send(200, self._health())
         return self._static(path)
@@ -408,6 +422,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/survey":
                 b = self._body()
                 self.experiment.store.write_survey(b)
+                return self._send(200, {"ok": True})
+            if path == "/api/event":
+                b = self._body()
+                for k in ("session_id", "kind", "ts"):
+                    if k not in b or b[k] is None or (isinstance(b[k], str) and not b[k]):
+                        raise ValueError(f"missing field: {k}")
+                self.experiment.store.write_event(b)
                 return self._send(200, {"ok": True})
             m = re.fullmatch(r"/api/session/([^/]+)/end", path)
             if m:

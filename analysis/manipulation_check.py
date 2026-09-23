@@ -404,6 +404,22 @@ def run(turns, equiv_bound):
     rep.check("세 조건의 대화당 총 지연이 동일", len(allv) <= 1,
               f"서로 다른 값 {sorted(allv)}" if len(allv) > 1 else f"{(allv.pop()/1000 if allv else 0):.1f}초")
 
+    # (a2) 대화별 목표지연 총합의 절대값 — 각 대화 target 합이 78000*scale ±250ms
+    expected_total = TOTAL_PER_CONVERSATION_MS * scale
+    bad_totals = []
+    for (sid, ci), rows in sorted(by_conv.items()):
+        if len(rows) < 9:
+            continue
+        total = sum(r["target_delay_ms"] for r in rows)
+        if abs(total - expected_total) > DISPLAY_TOLERANCE_MS:
+            bad_totals.append(f"{sid} 대화{ci}={total}ms")
+    rep.check(f"대화별 목표지연 총합이 {TOTAL_PER_CONVERSATION_MS}×{scale:g} ±{DISPLAY_TOLERANCE_MS}ms",
+              not bad_totals,
+              f"기대 {expected_total:g}ms에서 벗어남: {', '.join(bad_totals[:6])}"
+              + (f" 외 {len(bad_totals) - 6}건" if len(bad_totals) > 6 else "")
+              if bad_totals else f"기대 {expected_total:g}ms")
+    rep.data["conversation_total_expected_ms"] = expected_total
+
     # (b) 깊이 → 지연 배치가 조건 규칙대로인가
     rep.say()
     rep.say("  깊이별 평균 목표 지연 (조건이 정의하는 배치)")
