@@ -224,7 +224,7 @@ class Experiment:
 # ────────────────────────────── HTTP ──────────────────────────────
 
 # 배포본 식별자. 응답 헤더 X-Server-Build 로 나간다.
-SERVER_BUILD = "2026-09-18.d6"
+SERVER_BUILD = "2026-09-23.strict1"
 
 _FALLBACK_EXP = None
 _FALLBACK_LOCK = threading.Lock()

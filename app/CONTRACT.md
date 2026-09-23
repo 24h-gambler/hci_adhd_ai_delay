@@ -176,7 +176,7 @@ python3 app/server.py --port 8000 --provider anthropic     # 실제 모델
 배포본이 **실제로 쓸 수 있는 상태인지** 돌려준다.
 
 ```json
-{"ok": true, "server_build": "2026-09-18.d6", "handler": "Handler", "exp": "fallback"}
+{"ok": true, "server_build": "2026-09-23.strict1", "handler": "Handler", "exp": "fallback"}
 ```
 
 | 필드 | 뜻 |
