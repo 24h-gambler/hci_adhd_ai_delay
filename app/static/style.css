@@ -282,9 +282,10 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .chat-head { flex: 0 0 auto; padding: 0 0 12px; }
 .chat-topic {
   margin: 0;
-  color: var(--ink-2);
-  font-size: 15px;
+  color: var(--ink);
+  font-size: 17px;
 }
+.chat-topic strong { font-weight: 700; }
 .chat-progress {
   margin: 6px 0 0;
   font-size: 15px;
@@ -432,6 +433,13 @@ fieldset.q legend {
 }
 .q-text { margin: 0 0 16px; }
 .q-sub { color: var(--ink-3); font-size: 15px; }
+
+/* 미답 항목 하이라이트 (제출 검증 실패 시) */
+fieldset.q.missing {
+  border-color: var(--danger);
+  border-width: 2px;
+}
+fieldset.q.missing legend { color: var(--danger); }
 
 .q-inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .q-inline input[type="number"] { width: 110px; text-align: right; }
