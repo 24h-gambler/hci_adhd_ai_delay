@@ -201,6 +201,7 @@ def analyzable(t):
     return (
         not t.get("practice")
         and not t.get("opener")          # 오프너(고정 문구·8초·분석 제외)
+        and not t.get("test_mode")       # ?test=1 세션 — 포함채 실패가 아니라 제외
         and not t.get("safety_flag")
         and t.get("displayed")            # 표시되지 않은 턴은 부과 지연이 없다
         and t.get("condition") in CONDITIONS
@@ -615,7 +616,8 @@ def run(turns, equiv_bound):
             vs = response_rules.check(t.get("ai_response_text", ""),
                                       context=str(t.get("context", "a")),
                                       empathy_variant=str(variant),
-                                      expect_safety=bool(t.get("safety_flag")))
+                                      expect_safety=bool(t.get("safety_flag")),
+                                      depth=t.get("depth"))
             if vs:
                 bad_turns += 1
                 for x in vs:
@@ -708,7 +710,8 @@ def make_demo(broken=False, seed=7):
                 display = (resp + target) if broken else max(resp, submit + target)
                 nxt = display + rng.randint(1200, 4200)
                 n = resp_len[depth] + rng.randint(-8, 8)
-                text = ("그러셨군요. " if depth != "deep" else "말씀하신 그 부분이 마음에 남습니다. ")
+                text = ("그러셨군요. " if depth != "deep"
+                        else "말씀하신 그 부분이 마음에 남습니다. 시작 지점에서 막히는 상태처럼 들립니다. ")
                 text += "".join(rng.choice("가나다라마바사아자차") for _ in range(n))
                 text += " 어떤 부분이 제일 걸리셨나요?"
                 out.append({
@@ -724,7 +727,7 @@ def make_demo(broken=False, seed=7):
                     "next_input_start_ts": nxt if turn < 9 else None,
                     "finish_reason": "stop",
                     "safety_flag": False, "manipulation_ok": resp <= submit + target,
-                    "prompt_version": "v0.3", "base_prompt_sha256": base_hash,
+                    "prompt_version": "v0.4", "base_prompt_sha256": base_hash,
                     "prompt_sha256": depth_hash[depth],
                     "model": "demo-model", "temperature": 0.6, "max_tokens": 400,
                     "delay_scale": 1.0,

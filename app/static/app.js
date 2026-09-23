@@ -580,7 +580,6 @@
         turn_id: res.turn_id
       };
       State.records.push(rec);
-      State.openerPending = false;
       scheduleDisplay({
         turn_id: res.turn_id,
         target_delay_ms: res.target_delay_ms,
@@ -787,6 +786,10 @@
     });
 
     var clientRec = findRecord(p.turnId);
+    if (clientRec && clientRec.opener) {
+      // 오프너가 화면에 찍힌 지금 입력 해제. fetch 직후가 아니다.
+      State.openerPending = false;
+    }
     if (clientRec) {
       clientRec.display_ts = displayTs;
       clientRec.manipulation_ok = !clientRec.safety_flag && !clientRec.practice
