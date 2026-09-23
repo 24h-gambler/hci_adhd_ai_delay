@@ -273,6 +273,18 @@ def run(turns, equiv_bound):
     rep.data["n_turns"] = len(kept)
     rep.data["n_participants"] = len(parts)
 
+    # ★ 테스트 패널(?test=1)로 만든 로그가 섞이면 분석이 오염된다.
+    #   그 패널은 설문을 자동으로 채우고 세션을 자동주행한다. 서버가 그런
+    #   세션의 모든 레코드에 test_mode 를 찍으므로(app/server.py), 여기서
+    #   거른다. 주석으로 "실세션에서는 쓰지 않는다"고 적어 두는 것만으로는
+    #   산출된 JSONL 이 진짜 참가자 로그와 구분되지 않는다.
+    n_test = sum(1 for t in turns if t.get("test_mode"))
+    test_sessions = sorted({t.get("session_id", "?") for t in turns if t.get("test_mode")})
+    rep.check("테스트 패널로 만든 턴 없음", n_test == 0,
+              f"{n_test}턴 · 세션 {', '.join(test_sessions[:5])}"
+              f"{' …' if len(test_sessions) > 5 else ''} — 분석에서 빼야 한다" if n_test else "")
+    rep.data["test_mode_turns"] = n_test
+
     if not kept:
         rep.check("분석 가능한 턴 존재", False, "0턴")
         return rep
