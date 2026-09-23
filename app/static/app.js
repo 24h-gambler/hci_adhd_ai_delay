@@ -117,6 +117,7 @@
     prevTurnId: null,         // 다음 턴 첫 타자 입력 시각을 채워 넣을 직전 턴
     inputStartTs: null,       // 이번 턴 첫 타자 입력 시각
     awaiting: false,          // 서버 왕복 중 (입력은 계속 받는다 — 설계서 PART 3-4)
+    inflightText: null,       // 표시 대기 중인 전송 원문 (중복 재전송 판정용)
     pending: null,            // 표시 대기 중인 턴
     sendQueue: [],            // 대기 중 접수된 후속 메시지 {text, queuedAtTs}
 
@@ -442,7 +443,27 @@
 
     // 설계서 PART 3-4: 대기 중 전송은 큐에 넣고 현재 턴 종료 후 처리 (B1).
     // 입력창은 잠그지 않는다 — 대기 중에도 타이핑·전송이 된다.
+    // 단, 날아간 메시지와 같은 내용의 재전송(연타·불안 반응)은 턴으로 만들지
+    // 않고 B1(견딤 곤란 지표)로만 기록한다. 중복 턴 방지.
     if (State.awaiting) {
+      var norm = text.trim();
+      var dup = (State.inflightText != null && norm === State.inflightText.trim());
+      if (!dup) {
+        for (var qi = 0; qi < State.sendQueue.length; qi++) {
+          if (State.sendQueue[qi].text.trim() === norm) { dup = true; break; }
+        }
+      }
+      if (dup) {
+        var ev = { kind: 'B1_duplicate_ignored', ts: nowMs(), screen: State.screen,
+          conversation_index: State.conversationIndex };
+        State.attentionEvents.push(ev);
+        postEvent('B1_duplicate_ignored', ev);
+        D.chatInput.value = '';
+        State.inputStartTs = null;
+        toast('이미 전송되었습니다.');
+        publishLive();
+        return;
+      }
       var qStart = State.inputStartTs != null ? State.inputStartTs : nowMs();
       var bubble = appendMessage('user', text);
       scrollLogToEnd();
@@ -460,6 +481,7 @@
   function doSubmit(text, startTs, existingBubble, queued) {
     var submit = nowMs();                       // t0
     if (startTs == null) { startTs = submit; }  // 붙여넣기 등 입력 이벤트가 없던 경우
+    State.inflightText = text;
 
     var turnIndex = State.turnsSent + 1;
     var userBubble = existingBubble || appendMessage('user', text);
@@ -505,6 +527,7 @@
       hideIndicator();
       if (!queued && userBubble && userBubble.parentNode) { userBubble.parentNode.removeChild(userBubble); }
       State.awaiting = false;
+      State.inflightText = null;
       State.turnsSent = turnIndex - 1;
       D.chatInput.value = text;
       State.inputStartTs = startTs;
@@ -682,6 +705,7 @@
 
     State.pending = null;
     State.awaiting = false;
+    State.inflightText = null;
     State.prevTurnId = p.turnId;
     State.lastDisplay = {
       turnId: p.turnId,
@@ -1410,8 +1434,8 @@
   function installTestPanel() {
     var panel = document.createElement('div');
     panel.id = 'test-panel';
-    panel.appendChild(el('strong', null, 'TEST ONLY (real session ban)'));
-    var log = el('div', null, 'idle');
+    panel.appendChild(el('strong', null, '테스트용 (실세션 금지)'));
+    var log = el('div', null, '대기 중');
     log.id = 'test-log';
     panel.appendChild(log);
     function btn(label, fn) {
@@ -1421,27 +1445,27 @@
       panel.appendChild(b);
       return b;
     }
-    btn('fill survey', function () {
-      if (!window.__exp) { return testLog('no session'); }
+    btn('설문채우기', function () {
+      if (!window.__exp) { return testLog('세션 없음'); }
       window.__exp.fillSurvey().then(
-        function () { testLog('survey submitted'); },
-        function (e) { testLog('survey fail: ' + (e && e.message ? e.message : e)); });
+        function () { testLog('설문 제출됨'); },
+        function (e) { testLog('설문 실패: ' + (e && e.message ? e.message : e)); });
     });
-    btn('next', function () {
-      if (!window.__exp) { return testLog('no session'); }
-      testLog(window.__exp.advance() ? 'advanced' : 'no button');
+    btn('다음', function () {
+      if (!window.__exp) { return testLog('세션 없음'); }
+      testLog(window.__exp.advance() ? '다음으로 이동' : '누를 버튼 없음');
     });
-    btn('send msg', function () {
-      if (!window.__exp) { return testLog('no session'); }
+    btn('메시지 보내기', function () {
+      if (!window.__exp) { return testLog('세션 없음'); }
       var st = window.__exp.state();
       var text = TEST_MSGS[testAuto.mi++ % TEST_MSGS.length] + ' (' + st.conversationIndex + '-' + (st.turnIndex + 1) + ')';
       window.__exp.send(text).then(
-        function () { testLog('shown'); },
-        function (e) { testLog('send fail: ' + (e && e.message ? e.message : e)); });
+        function () { testLog('표시됨'); },
+        function (e) { testLog('전송 실패: ' + (e && e.message ? e.message : e)); });
     });
-    btn('auto-run', function () { testAutoRun(); });
-    btn('stop auto', function () { testAuto.running = false; testLog('stop requested'); });
-    btn('download logs', function () { downloadLogs(); testLog('downloading'); });
+    btn('끝까지 자동주행', function () { testAutoRun(); });
+    btn('자동주행 중지', function () { testAuto.running = false; testLog('중지 요청됨'); });
+    btn('로그 내려받기', function () { downloadLogs(); testLog('내려받기 실행'); });
     var dash = el('div', null, '');
     dash.id = 'test-dash';
     panel.appendChild(dash);
@@ -1491,31 +1515,31 @@
 
   function testAutoRun() {
     if (testAuto.running) { return; }
-    if (!window.__exp) { testLog('no session'); return; }
+    if (!window.__exp) { testLog('세션 없음'); return; }
     testAuto.running = true;
-    testLog('auto-run started');
+    testLog('자동주행 시작…');
     (function step() {
-      if (!testAuto.running) { testLog('stopped'); return; }
+      if (!testAuto.running) { testLog('중지됨'); return; }
       var st;
-      try { st = window.__exp.state(); } catch (e) { testAuto.running = false; testLog('state fail'); return; }
+      try { st = window.__exp.state(); } catch (e) { testAuto.running = false; testLog('상태 실패'); return; }
       var isDone = false;
       try { isDone = window.__exp.done(); } catch (e) { isDone = false; }
       Promise.resolve(isDone).then(function (done) {
-        if (done || !testAuto.running) { testAuto.running = false; testLog(done ? 'DONE' : 'stopped'); return; }
+        if (done || !testAuto.running) { testAuto.running = false; testLog(done ? '완료!' : '중지됨'); return; }
         if (st.screen === 'chat' || st.screen === 'practice') {
           var text = TEST_MSGS[testAuto.mi++ % TEST_MSGS.length];
           window.__exp.send(text + ' (' + st.conversationIndex + '-' + (st.turnIndex + 1) + ')').then(
-            function () { testLog('conv' + st.conversationIndex + ' turn' + (st.turnIndex + 1)); setTimeout(step, 120); },
+            function () { testLog('대화' + st.conversationIndex + ' ' + (st.turnIndex + 1) + '턴 표시'); setTimeout(step, 120); },
             function (e) {
               var m = String((e && e.message) || e);
               if (m.indexOf('끝났') >= 0 || m.indexOf('이전') >= 0 || m.indexOf('아닙니다') >= 0) {
                 window.__exp.advance(); setTimeout(step, 250);
-              } else { testAuto.running = false; testLog('send fail: ' + m); }
+              } else { testAuto.running = false; testLog('전송 실패: ' + m); }
             });
         } else if (st.screen === 'survey' || st.screen === 'engagement') {
           window.__exp.fillSurvey().then(
-            function () { testLog('survey submitted'); setTimeout(step, 250); },
-            function (e) { testAuto.running = false; testLog('survey fail: ' + String((e && e.message) || e)); });
+            function () { testLog('설문 제출됨'); setTimeout(step, 250); },
+            function (e) { testAuto.running = false; testLog('설문 실패: ' + String((e && e.message) || e)); });
         } else {
           window.__exp.advance(); setTimeout(step, 250);
         }
@@ -1732,6 +1756,7 @@
 
     D.btnSend.addEventListener('click', sendCurrentInput);
     D.chatInput.addEventListener('keydown', function (e) {
+      if (e.repeat) { return; }   // 키 반복 입력은 무시 (중복 전송 방지)
       if (e.key === 'Enter' && !e.shiftKey) {
         if (e.isComposing || e.keyCode === 229) { return; }   // 한글 조합 중에는 보내지 않는다
         e.preventDefault();
