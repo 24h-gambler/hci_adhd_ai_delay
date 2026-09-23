@@ -252,7 +252,9 @@
     State.participantId = pid;
     State.group = group;
 
-    post('/api/session/start', { participant_id: pid, group: group }).then(function (res) {
+    post('/api/session/start',
+         // ★ 테스트 패널로 시작했으면 서버가 모든 레코드에 찍는다.
+         { participant_id: pid, group: group, test_mode: OPT.test }).then(function (res) {
       State.session = res;
       State.turnsTotal = res.turns_per_conversation || 9;
       State.plan = buildPlan(res);
@@ -1001,6 +1003,7 @@
       conversation_index: State.conversationIndex,
       shown_ts: State.surveyShownTs,
       submitted_ts: nowMs(),
+      test_mode: OPT.test,
       responses: responses
     };
     State.surveys.push(payload);

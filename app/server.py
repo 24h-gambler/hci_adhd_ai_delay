@@ -61,7 +61,8 @@ class Experiment:
         self._system_hash = {d: build_prompts.sha256(v) for d, v in self._system.items()}
 
     # ── 세션 ──
-    def start_session(self, participant_id: str, group: str) -> dict:
+    def start_session(self, participant_id: str, group: str,
+                      test_mode: bool = False) -> dict:
         plan = sched.session_plan(participant_id)
         sid = sched.make_session_id(participant_id, now_ms())
         with self._lock:
@@ -69,6 +70,10 @@ class Experiment:
                 "session_id": sid,
                 "participant_id": participant_id,
                 "group": group,
+                # ★ 테스트 패널(?test=1)로 시작한 세션. 모든 레코드에 찍혀 나간다.
+                #   주석의 약속("실세션에서는 쓰지 않는다")만으로는 자동주행·설문
+                #   자동채우기가 만든 로그가 진짜 참가자 로그와 구분되지 않는다.
+                "test_mode": bool(test_mode),
                 "plan": plan,
                 "history": {},          # conversation_index -> [messages]
                 "alerts": [],
@@ -80,6 +85,7 @@ class Experiment:
             "condition_order": plan["condition_order"],
             "conversations": plan["conversations"],
             "turns_per_conversation": self.turns_per_conversation,
+            "test_mode": bool(test_mode),
             "prompt_version": self.cfg["version"],
             "base_prompt_sha256": self._base_hash,
             "model": self.provider.model,
@@ -148,6 +154,8 @@ class Experiment:
             "turn_index": turn_index, "practice": practice,
             "user_input_start_ts": start_ts, "user_input_submit_ts": submit_ts,
             "user_input_text": text, "user_input_chars": len(text),
+            # ★ 테스트 패널로 시작한 세션이면 모든 턴에 남는다 (조작 점검기가 거른다).
+            "test_mode": bool(sess.get("test_mode")),
             "queued_during_wait": bool(body.get("queued_during_wait", False)),
             "target_delay_ms": target,
             "llm_request_ts": result["request_ts"], "llm_response_ts": result["response_ts"],
@@ -188,6 +196,7 @@ class Experiment:
             "session_id": sid, "participant_id": pid,
             "group": body.get("group", "unspecified"),
             "plan": plan, "history": {}, "alerts": [], "restored": True,
+            "test_mode": bool(body.get("test_mode")),
         }
         conv = int(body.get("conversation_index", 0))
         # 클라이언트가 보낸 이력을 그 대화에만 넣는다 (대화 간 격리는 유지)
@@ -209,6 +218,17 @@ class Experiment:
                     merged.extend(sess["history"][k])
                 return merged
             return list(sess["history"].get(conv, []))
+
+    def stamp_test_mode(self, record: dict) -> dict:
+        """설문·이벤트 레코드에 세션의 test_mode 를 찍는다.
+
+        본문이 보내온 값을 그대로 믿지 않는다. 메모리에 세션이 있으면 그것이
+        기준이고, 없으면(서버리스 콜드 스타트) 본문 값을 쓴다.
+        """
+        with self._lock:
+            sess = self._sessions.get(record.get("session_id"))
+        record["test_mode"] = bool(sess["test_mode"]) if sess else bool(record.get("test_mode"))
+        return record
 
     def plan(self, sid: str) -> dict:
         with self._lock:
@@ -408,7 +428,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/session/start":
                 b = self._body()
                 return self._send(200, self.experiment.start_session(
-                    b.get("participant_id", "P00"), b.get("group", "unspecified")))
+                    b.get("participant_id", "P00"), b.get("group", "unspecified"),
+                    bool(b.get("test_mode"))))
             if path == "/api/turn":
                 return self._send(200, self.experiment.turn(self._body()))
             if path == "/api/turn/display":
@@ -421,14 +442,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if path == "/api/survey":
                 b = self._body()
-                self.experiment.store.write_survey(b)
+                self.experiment.store.write_survey(self.experiment.stamp_test_mode(b))
                 return self._send(200, {"ok": True})
             if path == "/api/event":
                 b = self._body()
                 for k in ("session_id", "kind", "ts"):
                     if k not in b or b[k] is None or (isinstance(b[k], str) and not b[k]):
                         raise ValueError(f"missing field: {k}")
-                self.experiment.store.write_event(b)
+                self.experiment.store.write_event(self.experiment.stamp_test_mode(b))
                 return self._send(200, {"ok": True})
             m = re.fullmatch(r"/api/session/([^/]+)/end", path)
             if m:

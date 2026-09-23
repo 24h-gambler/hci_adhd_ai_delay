@@ -20,6 +20,7 @@ TURN_FIELDS = [
     "session_id", "participant_id", "group",
     "conversation_index", "condition", "depth",
     "turn_index", "practice",
+    "test_mode",            # ?test=1 패널로 만든 세션 — 조작 점검기가 분석에서 거른다
     "user_input_start_ts", "user_input_submit_ts", "user_input_text", "user_input_chars",
     "queued_during_wait",   # B1: 대기 중 큐로 접수된 전송 (서버는 클라이언트 보고를 그대로 저장)
     "target_delay_ms",

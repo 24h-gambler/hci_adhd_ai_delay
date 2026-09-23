@@ -988,6 +988,46 @@ class EventAndRecallTest(ServerCase):
                          shown["display_ts"] - shown["user_input_submit_ts"])
 
 
+class TestModeStampTest(ServerCase):
+    """테스트 패널(?test=1)로 만든 세션은 로그에 그 사실이 남아야 한다.
+
+    배경 — 그 패널은 설문을 자동으로 채우고 세션을 자동주행한다. 표시가
+    없으면 산출된 JSONL 이 진짜 참가자 로그와 구분되지 않아 조용히 분석에
+    섞인다. 주석의 약속이 아니라 레코드로 보장한다.
+    """
+
+    def test_normal_session_is_not_marked(self):
+        s = self.new_session("P20", "adhd")
+        r = self.send_turn(s, 1, 1, "안녕하세요")
+        self.post("/api/turn/display",
+                  {"turn_id": r["turn_id"], "display_ts": r["deadline_ts"]})
+        rows = self.log_rows(s)
+        self.assertTrue(all(not t.get("test_mode") for t in rows), rows)
+
+    def test_test_mode_session_marks_every_turn(self):
+        s = self.post("/api/session/start",
+                      {"participant_id": "P21", "group": "adhd", "test_mode": True})
+        for i in (1, 2):
+            r = self.send_turn(s, 1, i, "자동주행 %d" % i)
+            self.post("/api/turn/display",
+                      {"turn_id": r["turn_id"], "display_ts": r["deadline_ts"]})
+        rows = self.log_rows(s)
+        self.assertTrue(rows, "턴이 기록되지 않았다")
+        self.assertTrue(all(t.get("test_mode") is True for t in rows),
+                        [t.get("test_mode") for t in rows])
+
+    def test_survey_is_stamped_from_the_session_not_the_body(self):
+        # ★ 본문이 test_mode 를 빼고 보내도 세션이 테스트면 찍혀야 한다.
+        s = self.post("/api/session/start",
+                      {"participant_id": "P22", "group": "adhd", "test_mode": True})
+        self.post("/api/survey", {"session_id": s["session_id"],
+                                  "conversation_index": 1, "responses": {}})
+        path = self.log_dir / (s["session_id"] + ".surveys.jsonl")
+        rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        self.assertTrue(rows and rows[0].get("test_mode") is True, rows)
+
+
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
