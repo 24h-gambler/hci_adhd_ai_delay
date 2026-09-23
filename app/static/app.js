@@ -144,10 +144,10 @@
   var TOPIC_CARD_TITLE = '이번에는 이런 이야기를 해 주세요';
 
   var TOPIC_CARD = [
-    '요즘 실제로 신경 쓰이거나 마음에 걸리는 일에 대해\n이야기해 주세요.',
-    '지어낸 이야기가 아니라 실제 고민일 때\n연구에 도움이 됩니다.',
-    '말씀하고 싶은 만큼만 하시면 되고,\n불편하시면 언제든 멈추실 수 있습니다.',
-    '한 대화는 아홉 번 주고받으면 마무리됩니다.\n대화는 모두 세 번입니다.'
+    '요즘 신경 쓰이거나 마음에 걸리는 일을\n이야기해 주세요.',
+    '실제 고민일 때 연구에 도움이 됩니다.',
+    '하고 싶은 만큼만 하세요.\n불편하면 언제든 멈춰도 됩니다.',
+    '대화는 아홉 번 주고받으면 끝납니다.\n모두 세 번 합니다.'
   ];
 
   var TOPIC_LINE = '대화 주제 — 요즘 신경 쓰이거나 마음에 걸리는 일';
@@ -908,6 +908,7 @@
         if (!(D.qWord && D.qWord.value.trim())) { missing.push('③-한단어'); }
       } else if (State.surveyPart === 2) {
         if (radioValue('effort') == null) { missing.push('④-노력'); }
+      } else if (State.surveyPart === 3) {
         for (var pi = 1; pi <= PETS_ITEMS.length; pi++) {
           if (radioValue('pets_' + pi) == null) { missing.push('⑤-' + pi); }
         }
@@ -1441,7 +1442,51 @@
     btn('auto-run', function () { testAutoRun(); });
     btn('stop auto', function () { testAuto.running = false; testLog('stop requested'); });
     btn('download logs', function () { downloadLogs(); testLog('downloading'); });
+    var dash = el('div', null, '');
+    dash.id = 'test-dash';
+    panel.appendChild(dash);
     document.body.appendChild(panel);
+    updateTestDash();
+    setInterval(updateTestDash, 1000);
+  }
+
+  function testSec(ms) {
+    return (Math.round(ms / 100) / 10) + 's';
+  }
+
+  function updateTestDash() {
+    var box = $('test-dash');
+    if (!box) { return; }
+    if (!State.session) { box.textContent = 'no session'; return; }
+    var dp = State.session.delay_placement || {};
+    var scale = State.session.delay_scale || 1;
+    var d = dp.deep_ms || 0, m = dp.medium_ms || 0, sh = dp.shallow_ms || 0;
+    var total = 3 * (d + m + sh);
+    var lines = [];
+    lines.push('DELAY: R1 deep' + testSec(d) + '/mid' + testSec(m) + '/sh' + testSec(sh)
+      + ' | R2 deep' + testSec(sh) + '/mid' + testSec(m) + '/sh' + testSec(d)
+      + ' | R3 shuffled | sum ' + testSec(total) + '/conv'
+      + (scale !== 1 ? ' (x' + scale + ' scaled)' : ' (FULL)'));
+    lines.push('ORDER: ' + (State.session.condition_order || []).join('>'));
+    var pos = State.screen
+      + (State.conversationIndex != null ? ' conv' + State.conversationIndex : '')
+      + (State.condition ? '(' + State.condition + ')' : '')
+      + ' turn ' + State.turnsSent + '/' + State.turnsTotal;
+    lines.push('POS: ' + pos);
+    if (State.lastDisplay) {
+      var rec = null;
+      for (var i = State.records.length - 1; i >= 0; i--) {
+        if (State.records[i].turn_id === State.lastDisplay.turnId) { rec = State.records[i]; break; }
+      }
+      if (rec) {
+        var obs = rec.display_ts - rec.user_input_submit_ts;
+        var err = rec.display_ts - (rec.user_input_submit_ts + rec.target_delay_ms);
+        lines.push('LAST: ' + rec.depth + ' target' + testSec(rec.target_delay_ms)
+          + ' obs' + testSec(obs) + ' err' + (err >= 0 ? '+' : '') + err + 'ms'
+          + (rec.queued_during_wait ? ' QUEUED' : ''));
+      }
+    }
+    box.textContent = lines.join('\n');
   }
 
   function testAutoRun() {
@@ -1556,6 +1601,8 @@
             D.btnSurveyNext.click();
           } else if (State.surveyPart === 2) {
             checkRadio('effort', 4);
+            D.btnSurveyNext.click();
+          } else if (State.surveyPart === 3) {
             for (var pi = 1; pi <= PETS_ITEMS.length; pi++) { checkRadio('pets_' + pi, 4); }
             D.btnSurveyNext.click();
           } else {
