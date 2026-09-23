@@ -86,14 +86,36 @@ def session_plan(participant_id: str) -> dict:
     }
 
 
+def _max_run(items: list) -> int:
+    best, cur = 1, 1
+    for i in range(1, len(items)):
+        cur = cur + 1 if items[i] == items[i - 1] else 1
+        best = max(best, cur)
+    return best
+
+
 def depth_sequence(session_id: str, conversation_index: int) -> list[str]:
     """그 대화 9턴의 지시 깊이 순서. 깊음 3 · 보통 3 · 얕음 3 고정 구성.
 
     순서는 (세션, 대화)로 시드된 무작위다. 조건과 무관하게 정해지므로
     깊이 순서가 조건과 교락되지 않는다.
+
+    ★ 같은 깊이 연속 2회 이하 (실험설계 PART 3-1). 단순 셔플에서
+    DDD/MMM 같은 3연속이 나오면 attempt 시드를 올려 다시 섞는다.
+    결정론은 유지된다 — 같은 (세션, 대화)는 항상 같은 순서.
     """
     pool = ["deep"] * 3 + ["medium"] * 3 + ["shallow"] * 3
-    return _shuffled(pool, session_id, conversation_index, "depth")
+    attempt = 0
+    while True:
+        if attempt == 0:
+            seq = _shuffled(pool, session_id, conversation_index, "depth")
+        else:
+            seq = _shuffled(pool, session_id, conversation_index, "depth", f"retry{attempt}")
+        if _max_run(seq) <= 2:
+            return seq
+        attempt += 1
+        if attempt > 50:  # 이론상 도달 불가 — 무한루프 방지
+            return seq
 
 
 def delay_sequence(session_id: str, conversation_index: int, condition: str,

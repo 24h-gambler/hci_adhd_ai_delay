@@ -191,29 +191,73 @@ api/index.py      srv.Handler 를 상속해 exp 만 매다는 껍데기
 가지면 실패한다** (`ast` 로 확인). 로직을 진입 파일로 되돌리면 "배포는
 됐는데 반영은 안 되는" 상태로 돌아가기 때문이다.
 
-### 확인된 상태 (2026-09-18)
+### 겹 3 — 진입 파일은 아예 실행되지 않는다
+
+겹 2 를 고친 뒤에도 프로덕션은 화면만 뜨고 시작 버튼이 죽어 있었다.
+런타임 로그에 사용자 테스트가 그대로 남아 있었다.
 
 ```
-GET /api/health  →  200  {"ok": true}
-                    x-server-build: 2026-09-18.d4
+07:37:35  GET  /app.js                 200   ← 화면은 떴다
+07:38:03  POST /api/session/start      500
+07:38:06  POST /api/session/start      500   ← 여기서 죽었다
 ```
 
-`x-server-build` 값이 방금 올린 판본과 같다 = 라우팅이 살아 있고 최신
-코드가 돌고 있다.
+```
+AttributeError: 'NoneType' object has no attribute 'plan'
+```
 
-**프로덕션 주소는 아직 첫(고장난) 배포본이다.** 프로덕션은 `main` 을 따라가고
-이 수정은 아직 브랜치에 있다. `hciadhdaidelay.vercel.app` 을 쓰려면 PR 을
-합쳐야 한다. 그 전까지는 브랜치 미리보기 주소를 쓴다.
+`self.exp` 가 `None` 이다. `api/index.py` 가 매다는 `exp = _exp` 가 먹히지
+않았다. 그리고 이어서 나온 `HCI_LOG_DIR` 미설정(`os.environ.setdefault` 가
+같은 파일에 있다)까지 합치면 결론은 하나다.
 
-### 연구자 화면은 배포본에서 비어 있다
+**Vercel 은 `api/index.py` 를 실행하지 않는다.** 배포본의 `/api/health` 가
+그 사실을 그대로 말한다.
 
-`GET /api/session/<id>/plan` 은 **메모리에 있는 세션만** 돌려준다. 서버리스는
-인스턴스가 매번 새로 뜨므로 계획표·안전 경보 이력이 비어 보인다.
+```json
+{"ok": true, "server_build": "2026-09-18.d6", "handler": "Handler", "exp": "fallback"}
+```
 
-시드에서 계획을 복원하게 만들 수도 있지만 **일부러 하지 않았다.** 세션 ID를
-잘못 입력해도 그럴듯한 계획표가 `alerts: []` 과 함께 뜨기 때문이다. 안전
-경보를 지켜보는 화면에서 "경보 없음"과 "세션을 못 찾음"이 같아 보이면 안 된다.
-연구자 화면은 노트북 실행(`python3 app/server.py`)에서만 쓴다.
+`handler` 가 `Handler` — 즉 `app/server.py` 의 클래스 자체다.
+`api/index.py` 의 `handler`(소문자) 가 아니다.
+
+| 겹 | 진입 파일에 기댄 것 | 증상 |
+| --- | --- | --- |
+| 1 | `route_path` 오버라이드 | `/api/*` 가 전부 200 + HTML |
+| 2 | `exp = _exp` 클래스 속성 | 실험 경로가 전부 500 |
+| 3 | `HCI_LOG_DIR` 환경변수 | 읽기 전용 파일 시스템 OSError |
+
+세 번 다 같은 가정에서 나왔다. **`app/server.py` 는 아무도 아무것도
+해 주지 않는다고 보고 혼자 설 수 있어야 한다.**
+
+- `route_path()` — 원래 경로를 `?__p=` 에서 복원
+- `default_experiment()` — 매달린 `exp` 가 없으면 스스로 만든다
+- `default_log_dir()` — 쓸 수 있는 곳을 직접 고른다 (안 되면 `/tmp`)
+
+### 배포 확인은 실제 기능을 건드려야 한다
+
+`/api/health` 가 `{"ok": true}` 만 돌려주던 동안, 실험 기능은 통째로 죽어
+있었다. **"200 이면 정상"이라는 확인이 이 사고를 세 번 통과시켰다.**
+그래서 health 가 실험 객체까지 건드리고 그 결과를 싣는다.
+
+```
+exp: "bound"     실행 환경이 매달아 줌 (노트북 실행)
+exp: "fallback"  서버가 스스로 세움 (서버리스)
+exp: "error"     세우지 못함 + 이유
+```
+
+### 배포본을 Vercel 과 같은 조건으로 로컬에서 밟는 법
+
+이 환경에서는 조직 egress 정책이 `*.vercel.app` 을 막아 배포본에
+POST 를 보낼 수 없다. 대신 **같은 조건을 로컬에 재현**한다.
+
+```python
+# exp 를 매달지 않고, server 객체에 verbose 도 없이 Handler 를 그대로 띄운다
+httpd = ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
+```
+
+여기에 `app/tests/e2e.js` 를 그대로 붙여 참가자 27턴을 완주시켰다.
+표시 오차 중앙 5ms · 최대 16ms, 조작 점검 17/17.
+`app/tests/test_server.py · ExpFallbackTest` 가 같은 조건을 상시 검사한다.
 
 ### 배포본이 최신인지 확인하는 법
 
@@ -227,6 +271,34 @@ curl -s  https://<배포주소>/api/health          # {"ok": true} 여야 한다
 
 `/api/health` 가 HTML 이면 라우팅이 깨진 것이고, 404 JSON 이면 경로가
 복원되지 않은 것이다. 둘 다 즉시 구분된다.
+
+### 확인된 상태 (2026-09-18)
+
+```
+GET /api/health
+  200  {"ok": true, "server_build": "2026-09-18.d6",
+        "handler": "Handler", "exp": "fallback"}
+
+GET /api/session/NOPE/plan
+  404  {"error": "'NOPE'"}        ← exp 가 실제로 서 있다는 증거
+```
+
+`/api/session/…/plan` 이 404 JSON 이라는 것은 `exp.plan()` 이 호출되어
+`KeyError` 를 던졌다는 뜻이다. 500 이면 `exp` 가 없는 것이고, HTML 이면
+라우팅이 깨진 것이다. 세 상태가 응답만으로 구분된다.
+
+**프로덕션 주소는 `main` 을 따라간다.** 브랜치에 아무리 배포해도
+`hciadhdaidelay.vercel.app` 은 바뀌지 않는다. PR 을 합쳐야 한다.
+
+### 연구자 화면은 배포본에서 비어 있다
+
+`GET /api/session/<id>/plan` 은 **메모리에 있는 세션만** 돌려준다. 서버리스는
+인스턴스가 매번 새로 뜨므로 계획표·안전 경보 이력이 비어 보인다.
+
+시드에서 계획을 복원하게 만들 수도 있지만 **일부러 하지 않았다.** 세션 ID를
+잘못 입력해도 그럴듯한 계획표가 `alerts: []` 과 함께 뜨기 때문이다. 안전
+경보를 지켜보는 화면에서 "경보 없음"과 "세션을 못 찾음"이 같아 보이면 안 된다.
+연구자 화면은 노트북 실행(`python3 app/server.py`)에서만 쓴다.
 
 ## 🔒 지금은 Vercel 로그인 없이 못 연다
 

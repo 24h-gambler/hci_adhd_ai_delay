@@ -171,6 +171,40 @@ python3 app/server.py --port 8000 --provider anthropic     # 실제 모델
 
 미완성 턴을 `display_ts: null`로 마감하고 로그를 닫는다.
 
+### `GET /api/health`
+
+배포본이 **실제로 쓸 수 있는 상태인지** 돌려준다.
+
+```json
+{"ok": true, "server_build": "2026-09-23.strict1", "handler": "Handler", "exp": "fallback"}
+```
+
+| 필드 | 뜻 |
+| --- | --- |
+| `ok` | 실험 객체가 서 있는가. 이것이 false면 실험 경로가 전부 죽어 있다 |
+| `server_build` | 도는 코드의 판본. 응답 헤더 `X-Server-Build` 와 같다 |
+| `handler` | 실행 환경이 띄운 핸들러 클래스 이름 |
+| `exp` | `bound`(환경이 매달아 줌) · `fallback`(서버가 스스로 세움) · `error`(+ 이유) |
+
+★ **살아 있다는 것만 보고하면 안 된다.** 배포본이 `{"ok": true}` 만
+돌려주던 동안 실험 기능은 통째로 500이었고, 그 확인이 사고를 세 번
+통과시켰다. health는 반드시 실험 객체를 건드린 결과를 실어야 한다.
+
+### 서버는 혼자 설 수 있어야 한다
+
+배포 환경(Vercel)은 진입 파일 `api/index.py` 를 실행하지 않는다.
+거기서 매단 `exp` 도, 넣은 환경변수도 서버에 닿지 않는다. 그래서
+`app/server.py` 가 세 가지를 스스로 해결한다.
+
+| 함수 | 없을 때 무슨 일이 났었나 |
+| --- | --- |
+| `route_path()` | `/api/*` 가 전부 200 + HTML |
+| `default_experiment()` | 실험 경로가 전부 500 |
+| `default_log_dir()` | 읽기 전용 파일 시스템 OSError |
+
+`app/tests/test_server.py · ExpFallbackTest` 가 `exp` 를 매달지 않은
+`Handler` 를 그대로 띄워 이 성질을 상시 검사한다.
+
 ---
 
 ## 3. 로그 스키마 (JSONL, 한 줄 = 한 턴)
@@ -252,12 +286,15 @@ python3 app/server.py --port 8000 --provider anthropic     # 실제 모델
 ## 7. 프런트엔드 화면 순서
 
 ```
-consent → briefing → practice → [블록 1: card → chat×3 (각 chat 뒤 survey)]
-→ engagement(블록 1) → break → [블록 2: card → chat×3 + survey×3]
-→ engagement(블록 2) → done
+consent → briefing → practice(4턴, 8초 고정·분석 제외) → card(1회)
+→ [chat → survey] ×3 (사이 break)
+→ engagement(매핑 3택) → done
 ```
 
-### 타이밍 규칙 (프런트엔드)
+본블록 9턴 = 깊음 3 · 보통 3 · 얕음 3. 연습 4턴은 실험설계 PART 2
+(워밍업 4–5턴) 하한이다.
+
+### 타이밍 규칙 (프런트엔드) — 엄격 모드
 
 ```js
 // 전송
@@ -275,10 +312,16 @@ function show(){ appendMessage(reply); POST /api/turn/display {display_ts: nowMs
 
 - `nowMs()`는 `performance.timeOrigin + performance.now()`를 반올림한다.
   `Date.now()`는 해상도와 점프 때문에 쓰지 않는다.
-- 대기 중 화면 상태는 `?indicator=none|dots|typing`으로 전환한다
-  (기본 `dots`). **세 조건에서 동일하다** — `OPEN_QUESTIONS.md` Q5.
-- 진행 표시 `(n/5)`는 **전송 직후** 증가한다.
-- `?progress=0`으로 진행 표시를 끌 수 있다 (Q4 파일럿용).
+- 대기 중 화면은 완전 정지다. 타이핑 점·`…`·스피너·진행 바·남은 시간
+  표시를 절대 그리지 않는다. `?indicator=`·`?progress=` URL 옵션은
+  엄격 모드에서 무시된다 (기본 `none`/off 고정).
+- 진행 표시 `(n/9)`·`이번 대화는 N번` 문구를 화면에 내지 않는다.
+- 입력창은 대기 중에도 열려 있다. 대기 중 전송은 큐(`sendQueue`)에
+  넣고 현재 턴 표시 직후 새 턴으로 전송한다. 큐 접수 턴은
+  `queued_during_wait: true`로 로그에 남는다 (B1).
+- 대기 중 첫 타자도 `user_input_start_ts`에 그대로 기록된다 (B2).
+- `visibilitychange`/`blur` 이탈은 `attentionEvents` 메모리 로그 +
+  연구자 화면·`*.attention.jsonl`에 남긴다 (B4, 서버 영속화는 Phase 2).
 
 ### 자동 진행 훅 (E2E 전용)
 
