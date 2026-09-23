@@ -286,12 +286,15 @@ python3 app/server.py --port 8000 --provider anthropic     # 실제 모델
 ## 7. 프런트엔드 화면 순서
 
 ```
-consent → briefing → practice → [블록 1: card → chat×3 (각 chat 뒤 survey)]
-→ engagement(블록 1) → break → [블록 2: card → chat×3 + survey×3]
-→ engagement(블록 2) → done
+consent → briefing → practice(4턴, 8초 고정·분석 제외) → card(1회)
+→ [chat → survey] ×3 (사이 break)
+→ engagement(매핑 3택) → done
 ```
 
-### 타이밍 규칙 (프런트엔드)
+본블록 9턴 = 깊음 3 · 보통 3 · 얕음 3. 연습 4턴은 실험설계 PART 2
+(워밍업 4–5턴) 하한이다.
+
+### 타이밍 규칙 (프런트엔드) — 엄격 모드
 
 ```js
 // 전송
@@ -309,10 +312,16 @@ function show(){ appendMessage(reply); POST /api/turn/display {display_ts: nowMs
 
 - `nowMs()`는 `performance.timeOrigin + performance.now()`를 반올림한다.
   `Date.now()`는 해상도와 점프 때문에 쓰지 않는다.
-- 대기 중 화면 상태는 `?indicator=none|dots|typing`으로 전환한다
-  (기본 `dots`). **세 조건에서 동일하다** — `OPEN_QUESTIONS.md` Q5.
-- 진행 표시 `(n/5)`는 **전송 직후** 증가한다.
-- `?progress=0`으로 진행 표시를 끌 수 있다 (Q4 파일럿용).
+- 대기 중 화면은 완전 정지다. 타이핑 점·`…`·스피너·진행 바·남은 시간
+  표시를 절대 그리지 않는다. `?indicator=`·`?progress=` URL 옵션은
+  엄격 모드에서 무시된다 (기본 `none`/off 고정).
+- 진행 표시 `(n/9)`·`이번 대화는 N번` 문구를 화면에 내지 않는다.
+- 입력창은 대기 중에도 열려 있다. 대기 중 전송은 큐(`sendQueue`)에
+  넣고 현재 턴 표시 직후 새 턴으로 전송한다. 큐 접수 턴은
+  `queued_during_wait: true`로 로그에 남는다 (B1).
+- 대기 중 첫 타자도 `user_input_start_ts`에 그대로 기록된다 (B2).
+- `visibilitychange`/`blur` 이탈은 `attentionEvents` 메모리 로그 +
+  연구자 화면·`*.attention.jsonl`에 남긴다 (B4, 서버 영속화는 Phase 2).
 
 ### 자동 진행 훅 (E2E 전용)
 

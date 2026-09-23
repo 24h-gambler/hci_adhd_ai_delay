@@ -41,10 +41,11 @@
   }
 
   var OPT = {
-    // 명세서 §4 — 아무것도 표시하지 않는다. 점 세 개는 그 자체가 사회적
-    // 단서이며 지연 효과와 섞인다. 기본값을 바꾸지 말 것.
-    indicator: pick(params.get('indicator'), ['none', 'dots', 'typing'], 'none'),
-    progress: params.get('progress') !== '0',
+    // 실험설계 PART 3-4 — 엄격 모드. URL 옵션으로 표시/진행을 켤 수 없다.
+    // indicator는 항상 none(정지 화면), progress는 항상 off(진행 카운터 없음).
+    // 파일럿용 ?indicator/?progress 질의는 무시한다.
+    indicator: 'none',
+    progress: false,
     e2e: params.get('e2e') === '1',
     researcher: params.get('researcher') === '1' || /\/researcher\/?$/.test(location.pathname)
   };
@@ -113,12 +114,14 @@
 
     prevTurnId: null,         // 다음 턴 첫 타자 입력 시각을 채워 넣을 직전 턴
     inputStartTs: null,       // 이번 턴 첫 타자 입력 시각
-    awaiting: false,          // /api/turn 왕복 또는 마감 대기 중
+    awaiting: false,          // 서버 왕복 중 (입력은 계속 받는다 — 설계서 PART 3-4)
     pending: null,            // 표시 대기 중인 턴
+    sendQueue: [],            // 대기 중 접수된 후속 메시지 {text, queuedAtTs}
 
     lastDisplay: null,        // {turnId, deadline, displayTs, error}
     displayLog: [],
     safetyEvents: [],
+    attentionEvents: [],      // B4: 화면 이탈(visibilitychange/blur) 시각·지속
     surveyShownTs: null,
     lastSubmit: Promise.resolve(),
     surveyPart: 1,
@@ -147,7 +150,7 @@
 
   var TOPIC_LINE = '대화 주제 — 요즘 신경 쓰이거나 마음에 걸리는 일';
 
-  var PRACTICE_NOTE = '연습입니다. 아무 말이나 한 문장 입력하고 보내 보세요.';
+  var PRACTICE_NOTE = '연습입니다. 네 번 주고받아 보세요. 아무 말이나 입력하고 보내면 됩니다.';
 
   var QDQ_ITEMS = [
     '〔자리표시자 나-1〕 QDQ 문항 1 — 원척도 문항으로 교체 예정',
@@ -332,12 +335,14 @@
   function startConversation(conv, isPractice) {
     State.conversationIndex = conv.index;
     State.condition = isPractice ? 'practice' : conv.condition;
-    State.turnsTotal = isPractice ? 1 : (State.session && State.session.turns_per_conversation) || 5;
+    // 설계서 PART 2: 워밍업 4턴(8초 고정·분석 제외), 본블록 9턴.
+    State.turnsTotal = isPractice ? 4 : (State.session && State.session.turns_per_conversation) || 9;
     State.turnsSent = 0;
     State.prevTurnId = null;          // 대화가 바뀌면 직전 턴 연결을 끊는다 (마지막 턴은 next_input null)
     State.inputStartTs = null;
     State.pending = null;
     State.awaiting = false;
+    State.sendQueue = [];
 
     clear(D.chatLog);
     D.chatTopic.textContent = isPractice ? '연습' : TOPIC_LINE;
@@ -350,21 +355,19 @@
     D.chatInput.value = '';
     setComposerEnabled(true);
 
-    if (isPractice) {
-      D.chatProgress.hidden = true;
-    } else {
-      D.chatProgress.hidden = false;
-      D.chatProgressText.textContent = '이번 대화는 ' + State.turnsTotal + '번 주고받으면 마무리됩니다.';
-      D.chatCounter.hidden = !OPT.progress;
-      renderCounter();
-    }
+    // 설계서 PART 3-4: 진행 표시 없음 — 연습·본대화 모두 카운터 숨김.
+    D.chatProgress.hidden = true;
+    if (D.chatCounter) { D.chatCounter.hidden = true; }
 
     showScreen(isPractice ? 'practice' : 'chat');
     if (!OPT.e2e) { try { D.chatInput.focus(); } catch (e) { /* 무시 */ } }
   }
 
   function renderCounter() {
-    D.chatCounter.textContent = '(' + State.turnsSent + ' / ' + State.turnsTotal + ')';
+    // 설계서 PART 3-4: 진행 표시 없음 — 카운터 렌더링은 no-op으로 유지.
+    // (구 코드·E2E 잔재 호출이 있어도 화면에 아무것도 그리지 않는다.)
+    if (D.chatCounter) { D.chatCounter.hidden = true; }
+    if (D.chatProgress) { D.chatProgress.hidden = true; }
   }
 
   function setComposerEnabled(on) {
@@ -385,24 +388,9 @@
      드러내지 않는다. ?indicator=none|dots|typing 로만 바뀐다. */
 
   function showIndicator() {
-    if (OPT.indicator === 'none') { return; }
-    hideIndicator();
-    var wrap = el('div', 'msg msg-ai msg-wait');
-    wrap.id = 'wait-bubble';
-    wrap.setAttribute('aria-hidden', 'true');
-    var bubble = el('div', 'bubble');
-    if (OPT.indicator === 'dots') {
-      bubble.textContent = '…';
-    } else {
-      var dots = el('span', 'wait-dots is-typing');
-      dots.appendChild(el('i'));
-      dots.appendChild(el('i'));
-      dots.appendChild(el('i'));
-      bubble.appendChild(dots);
-    }
-    wrap.appendChild(bubble);
-    D.chatLog.appendChild(wrap);
-    scrollLogToEnd();
+    // 설계서 PART 3-4 엄격 모드: 대기 표시 없음. 어떤 분기에서도 DOM에
+    // 대기 버블을 그리지 않는다 (구 ?indicator 옵션은 OPT에서 제거됨).
+    return;
   }
 
   function hideIndicator() {
@@ -418,7 +406,8 @@
 
   function markInputStart() {
     if (State.inputStartTs != null) { return; }
-    if (State.awaiting) { return; }
+    // 설계서 PART 3-4: 대기 중에도 입력창 개방 — awaiting 가드를 두지 않는다.
+    // 대기 중 첫 타자(B2)도 그대로 기록된다.
     var ts = nowMs();
     State.inputStartTs = ts;
 
@@ -436,29 +425,44 @@
   /* --- 전송 ------------------------------------------------------ */
 
   function sendCurrentInput() {
-    if (State.awaiting) { return; }
     if (State.screen !== 'chat' && State.screen !== 'practice') { return; }
-    if (State.turnsSent >= State.turnsTotal) { return; }
+    if (State.turnsSent + State.sendQueue.length >= State.turnsTotal) { return; }
     if (isOverlayOpen()) { return; }
 
     var text = D.chatInput.value;
     if (!text || !text.trim()) { return; }
 
+    // 설계서 PART 3-4: 대기 중 전송은 큐에 넣고 현재 턴 종료 후 처리 (B1).
+    // 입력창은 잠그지 않는다 — 대기 중에도 타이핑·전송이 된다.
+    if (State.awaiting) {
+      var qStart = State.inputStartTs != null ? State.inputStartTs : nowMs();
+      var bubble = appendMessage('user', text);
+      scrollLogToEnd();
+      State.sendQueue.push({
+        text: text, startTs: qStart, queuedAtTs: nowMs(), bubble: bubble, queued: true
+      });
+      D.chatInput.value = '';
+      State.inputStartTs = null;
+      publishLive();
+      return;
+    }
+    doSubmit(text, State.inputStartTs, null, false);
+  }
+
+  function doSubmit(text, startTs, existingBubble, queued) {
     var submit = nowMs();                       // t0
-    if (State.inputStartTs == null) { State.inputStartTs = submit; }  // 붙여넣기 등 입력 이벤트가 없던 경우
+    if (startTs == null) { startTs = submit; }  // 붙여넣기 등 입력 이벤트가 없던 경우
 
     var turnIndex = State.turnsSent + 1;
-    var startTs = State.inputStartTs;
-
-    var userBubble = appendMessage('user', text);
+    var userBubble = existingBubble || appendMessage('user', text);
     scrollLogToEnd();
     D.chatInput.value = '';
-    setComposerEnabled(false);
+    // 엄격 모드: 대기 중에도 입력창을 열어 둔다 (잠금 없음).
+    setComposerEnabled(true);
     State.awaiting = true;
     State.inputStartTs = null;
 
-    State.turnsSent = turnIndex;                // 진행 표시는 전송 직후 증가 (계약 §7)
-    if (State.screen === 'chat') { renderCounter(); }
+    State.turnsSent = turnIndex;                // 전송 직후 증가 (내부 상태용, 화면 미표시)
     publishLive();
 
     showIndicator();
@@ -472,6 +476,7 @@
       text: text,
       user_input_start_ts: startTs,
       user_input_submit_ts: submit,
+      queued_during_wait: !!queued,
       // 서버가 무상태일 수 있다 (서버리스). 이 대화의 이력만 함께 보낸다.
       history: State.records
         .filter(function (r) { return r.conversation_index === State.conversationIndex; })
@@ -481,18 +486,18 @@
           return acc;
         }, [])
     }).then(function (res) {
-      recordTurn(res, submit, startTs, text, State.screen === 'practice');
+      recordTurn(res, submit, startTs, text, State.screen === 'practice', !!queued);
       scheduleDisplay(res, submit);
     }).catch(function (err) {
       console.error(err);
       // 턴이 성립하지 않았으므로 카운터를 되돌리고 재전송할 수 있게 둔다.
       // 화면에 붙인 사용자 말풍선도 함께 거둔다 — 남겨 두면 재전송 때 같은
       // 문장이 두 번 보이고, 화면 대화 기록이 로그의 턴 순서와 어긋난다.
+      // (큐로 들어온 말풍선은 거두지 않고 큐에 그대로 둔다.)
       hideIndicator();
-      if (userBubble && userBubble.parentNode) { userBubble.parentNode.removeChild(userBubble); }
+      if (!queued && userBubble && userBubble.parentNode) { userBubble.parentNode.removeChild(userBubble); }
       State.awaiting = false;
       State.turnsSent = turnIndex - 1;
-      if (State.screen === 'chat') { renderCounter(); }
       D.chatInput.value = text;
       State.inputStartTs = startTs;
       setComposerEnabled(true);
@@ -504,7 +509,7 @@
 
   /* --- 표시 예약 (계약 §7 그대로) -------------------------------- */
 
-  function recordTurn(res, submit, startTs, text, practice) {
+  function recordTurn(res, submit, startTs, text, practice, queued) {
     var rec = {
       session_id: State.session ? State.session.session_id : null,
       participant_id: State.participantId,
@@ -514,6 +519,7 @@
       turn_index: State.turnsSent, practice: !!practice,
       user_input_start_ts: startTs, user_input_submit_ts: submit,
       user_input_text: text, user_input_chars: text.length,
+      queued_during_wait: !!queued,   // B1: 대기 중 큐로 접수된 전송
       target_delay_ms: res.target_delay_ms,
       llm_request_ts: res.llm_request_ts, llm_response_ts: res.llm_response_ts,
       display_ts: null,
@@ -548,7 +554,8 @@
   function downloadLogs() {
     var sid = (State.session && State.session.session_id) || 'session';
     [[sid + '.turns.jsonl', buildJsonl()],
-     [sid + '.surveys.jsonl', State.surveys.map(function (s) { return JSON.stringify(s); }).join('\n') + '\n']
+     [sid + '.surveys.jsonl', State.surveys.map(function (s) { return JSON.stringify(s); }).join('\n') + '\n'],
+     [sid + '.attention.jsonl', State.attentionEvents.map(function (a) { return JSON.stringify(a); }).join('\n') + '\n']
     ].forEach(function (pair) {
       var blob = new Blob([pair[1]], { type: 'application/x-ndjson' });
       var a = document.createElement('a');
@@ -681,7 +688,15 @@
       if (!OPT.e2e) { try { D.chatInput.focus(); } catch (e) { /* 무시 */ } }
     }
 
-    if (p.safety) { openSafetyOverlay(p); }
+    if (p.safety) { openSafetyOverlay(p); return; }
+
+    // 대기 중 큐(B1) 드레인: 현재 턴 표시 직후 다음 큐 메시지를 새 턴으로 전송.
+    // 말풍선은 큐 접수 시점에 이미 붙였으므로 재사용한다.
+    if (State.sendQueue.length && State.turnsSent < State.turnsTotal &&
+        (State.screen === 'chat' || State.screen === 'practice')) {
+      var q = State.sendQueue.shift();
+      doSubmit(q.text, q.startTs, q.bubble, true);
+    }
   }
 
   function resolveDisplayWaiters() {
@@ -978,6 +993,8 @@
         turns_sent: State.turnsSent,
         turns_total: State.turnsTotal,
         safety_events: State.safetyEvents,
+        attention_events: State.attentionEvents,
+        queue_len: State.sendQueue.length,
         display_log: State.displayLog.slice(-40),
         options: OPT
       };
@@ -1130,7 +1147,7 @@
     var nowConv = live && live.session_id === RS.sessionId ? live.conversation_index : null;
 
     var practiceRow = document.createElement('tr');
-    ['0', 'practice', '연습 (고정)', '1', nowConv === 0 ? '진행 중' : (nowConv != null && nowConv > 0 ? '완료' : '대기')]
+    ['0', 'practice', '연습 (고정 8초)', '4', nowConv === 0 ? '진행 중' : (nowConv != null && nowConv > 0 ? '완료' : '대기')]
       .forEach(function (t) { practiceRow.appendChild(el('td', null, t)); });
     if (nowConv === 0) { practiceRow.className = 'is-now'; }
     tbody.appendChild(practiceRow);
@@ -1412,6 +1429,33 @@
 
     buildSurveyForm();
     showScreen('consent');
+
+    // B4: 화면 이탈 기록 — 서버 로그는 Phase 2에서 붙이고, 1차는 메모리+
+    // 연구자 화면·내보내기에 남긴다. 대기 중 이탈(B4)과 주의 이탈 분석용.
+    (function initAttentionLog() {
+      var hideTs = null;
+      function markHide(kind) {
+        if (hideTs != null) { return; }
+        hideTs = nowMs();
+        State.attentionEvents.push({ kind: kind + '_hide', ts: hideTs,
+          screen: State.screen, conversation_index: State.conversationIndex });
+        publishLive();
+      }
+      function markShow(kind) {
+        if (hideTs == null) { return; }
+        var dur = nowMs() - hideTs;
+        State.attentionEvents.push({ kind: kind + '_show', ts: nowMs(),
+          duration_ms: dur, screen: State.screen,
+          conversation_index: State.conversationIndex });
+        hideTs = null;
+        publishLive();
+      }
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) { markHide('visibility'); } else { markShow('visibility'); }
+      });
+      window.addEventListener('blur', function () { markHide('blur'); });
+      window.addEventListener('focus', function () { markShow('blur'); });
+    })();
 
     if (OPT.e2e) { installE2E(); }
   }

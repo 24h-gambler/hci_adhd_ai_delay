@@ -148,6 +148,7 @@ class Experiment:
             "turn_index": turn_index, "practice": practice,
             "user_input_start_ts": start_ts, "user_input_submit_ts": submit_ts,
             "user_input_text": text, "user_input_chars": len(text),
+            "queued_during_wait": bool(body.get("queued_during_wait", False)),
             "target_delay_ms": target,
             "llm_request_ts": result["request_ts"], "llm_response_ts": result["response_ts"],
             "ai_response_text": result["text"], "ai_response_chars": len(result["text"]),
