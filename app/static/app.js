@@ -152,7 +152,8 @@
     '대화는 아홉 번 주고받으면 끝납니다.\n모두 세 번 합니다.'
   ];
 
-  var TOPIC_LINE = '대화 주제 — 요즘 신경 쓰이거나 마음에 걸리는 일';
+  var TOPIC_LABEL = '대화 주제: ';
+  var TOPIC_PHRASE = '요즘 신경 쓰이거나 마음에 걸리는 일';
 
   var PRACTICE_NOTE = '연습입니다. 네 번 주고받아 보세요. 아무 말이나 입력하고 보내면 됩니다.';
 
@@ -357,7 +358,14 @@
     State.sendQueue = [];
 
     clear(D.chatLog);
-    D.chatTopic.textContent = isPractice ? '연습' : TOPIC_LINE;
+    if (isPractice) { D.chatTopic.textContent = '연습'; }
+    else {
+      D.chatTopic.innerHTML = '';
+      D.chatTopic.appendChild(document.createTextNode(TOPIC_LABEL));
+      var strong = document.createElement('strong');
+      strong.textContent = TOPIC_PHRASE;
+      D.chatTopic.appendChild(strong);
+    }
     D.chatNote.textContent = isPractice ? PRACTICE_NOTE : '';
     D.chatNote.hidden = !isPractice;
     if (State.endAutoTimer) { clearTimeout(State.endAutoTimer); State.endAutoTimer = null; }
@@ -548,7 +556,8 @@
   /* --- 표시 예약 (계약 §7 그대로) -------------------------------- */
 
   // AI 오프너 (PART 3-3): 고정 문구·8초 고정·분석 제외. 참가자는 답부터 시작.
-  function fetchOpener(convIndex, isPractice) {
+  function fetchOpener(convIndex, isPractice, tries) {
+    tries = tries || 0;
     var t0 = nowMs();
     post('/api/opener', {
       session_id: State.session.session_id,
@@ -594,12 +603,18 @@
         model: res.model
       }, t0);
     }).catch(function (err) {
+      if (tries < 2) {
+        setTimeout(function () { fetchOpener(convIndex, isPractice, tries + 1); }, 700);
+        return;
+      }
       console.error(err);
-      // 오프너 없이도 세션은 진행되게 둔다 (분석에는 영향 없음 — turn 0 부재).
-      State.openerPending = false;
-      setComposerEnabled(true);
+      var ev = { kind: 'opener_failed', ts: nowMs(), screen: State.screen,
+        conversation_index: convIndex };
+      State.attentionEvents.push(ev);
+      postEvent('opener_failed', ev);
       toast('화면에 문제가 있습니다. 연구자를 불러주세요.');
       publishLive();
+      // 입력창을 잠근 채 둔다 — 오프너 없는 참가자 선톡 세션을 만들지 않는다.
     });
   }
 
@@ -1007,6 +1022,7 @@
       if (missing.length) {
         D.surveyError.textContent = '아직 답하지 않은 항목이 있습니다: ' + missing.join(', ');
         D.surveyError.hidden = false;
+        flagMissing(missing);
         return Promise.resolve(false);
       }
       D.surveyError.hidden = true;
@@ -1020,6 +1036,7 @@
     if (missing.length) {
       D.surveyError.textContent = '아직 답하지 않은 항목이 있습니다: ' + missing.join(', ');
       D.surveyError.hidden = false;
+      flagMissing(missing);
       return Promise.resolve(false);
     }
     D.surveyError.hidden = true;
@@ -1069,6 +1086,7 @@
     if (missing.length) {
       D.engagementError.textContent = '아직 답하지 않은 항목이 있습니다: ' + missing.join(', ');
       D.engagementError.hidden = false;
+      flagMissing(missing);
       return Promise.resolve(false);
     }
     D.engagementError.hidden = true;
@@ -1082,6 +1100,38 @@
     responses.engagement_index = vals.some(function (v) { return v == null; })
       ? null : Math.round((vals.reduce(function (a, b) { return a + b; }, 0) / 4) * 100) / 100;
     return sendSurvey('session_end', responses);
+  }
+
+  // 미답 항목으로 스크롤 + 빨간 테두리. 답하면(입력/변경) 표시가 풀린다.
+  function missingTarget(tok) {
+    if (!tok) { return null; }
+    var m, c = tok.charAt(0);
+    if (c === '①') { return D.qTime; }
+    if (c === '②') { return document.querySelector('input[name="discomfort"]'); }
+    if (c === '③') { return D.qWord; }
+    if (c === '④') { return document.querySelector('input[name="effort"]'); }
+    if (c === '⑤') { m = tok.match(/⑤-(\d+)/); return m && document.querySelector('input[name="pets_' + m[1] + '"]'); }
+    if (c === '⑥') { m = tok.match(/⑥-(.+)/); return m && document.querySelector('input[name="' + m[1] + '"]'); }
+    if (c === '가') { return document.querySelector('input[name="rule_guess"]'); }
+    if (c === '나') { m = tok.match(/나-(.+)/); return m && document.querySelector('input[name="' + m[1] + '"]'); }
+    return null;
+  }
+
+  function flagMissing(tokens) {
+    var first = null;
+    (tokens || []).forEach(function (tok) {
+      var tgt = null;
+      try { tgt = missingTarget(tok); } catch (e) { tgt = null; }
+      if (!tgt || !tgt.closest) { return; }
+      var fs = tgt.closest('fieldset.q');
+      if (fs) {
+        fs.classList.add('missing');
+        if (!first) { first = fs; }
+      }
+    });
+    if (first && first.scrollIntoView) {
+      try { first.scrollIntoView({ block: 'center' }); } catch (e) { first.scrollIntoView(); }
+    }
   }
 
   function sendSurvey(kind, responses) {
@@ -1797,6 +1847,15 @@
       }
     });
 
+
+    function clearMissing(e) {
+      var fs = e.target && e.target.closest ? e.target.closest('fieldset.q') : null;
+      if (fs) { fs.classList.remove('missing'); }
+    }
+    D.surveyForm.addEventListener('input', clearMissing);
+    D.surveyForm.addEventListener('change', clearMissing);
+    D.engagementForm.addEventListener('input', clearMissing);
+    D.engagementForm.addEventListener('change', clearMissing);
 
     D.surveyForm.addEventListener('submit', function (e) {
       e.preventDefault();
