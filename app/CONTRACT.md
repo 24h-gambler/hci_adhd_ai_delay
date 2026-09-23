@@ -84,18 +84,14 @@ python3 app/server.py --port 8000 --provider anthropic     # 실제 모델
   // ↓ P01(N=1)의 실제 배정. §4의 식으로 계산한 값이다.
   //   블록 1 = PERMS[(1-1)%6] = PERMS[0], 블록 2 = PERMS[(1-1+3)%6] = PERMS[3]
   "conversations": [
-    {"index":1,"block":1,"context":"a","condition":"immediate"},
-    {"index":2,"block":1,"context":"a","condition":"long"},
-    {"index":3,"block":1,"context":"a","condition":"medium"},
-    {"index":4,"block":2,"context":"b","condition":"long"},
-    {"index":5,"block":2,"context":"b","condition":"medium"},
-    {"index":6,"block":2,"context":"b","condition":"immediate"}
+    {"index":1,"condition":"R1","turns":9},
+    {"index":2,"condition":"R2","turns":9},
+    {"index":3,"condition":"R3","turns":9}
   ],
-  "turns_per_conversation": 5,
-  "empathy_variant": "B",
-  "prompt_version": "v0.2",
-  "prompt_sha256": {"a": "...", "b": "..."},
-  "model": "mock-1", "temperature": 0.6, "max_tokens": 200
+  "turns_per_conversation": 9,
+  "prompt_version": "v0.4",
+  "base_prompt_sha256": "...",
+  "model": "mock-fixed", "temperature": 0.6, "max_tokens": 400
 }
 ```
 
@@ -108,7 +104,7 @@ python3 app/server.py --port 8000 --provider anthropic     # 실제 모델
 {
   "session_id": "P01-...",
   "conversation_index": 1,          // 0 = 연습
-  "turn_index": 1,                  // 1..5
+  "turn_index": 1,                  // 1..9 (0 = 오프너, /api/opener)
   "text": "사용자 입력 원문",
   "user_input_start_ts": 1756400000000,
   "user_input_submit_ts": 1756400004210     // = t0
@@ -116,16 +112,16 @@ python3 app/server.py --port 8000 --provider anthropic     # 실제 모델
 // 응답
 {
   "turn_id": "P01-...:1:1",
-  "target_delay_ms": 8412,          // 연습 턴은 800
-  "deadline_ts": 1756400012622,     // = user_input_submit_ts + target_delay_ms
+  "target_delay_ms": 15000,        // 예: R1 깊은 답. 연습·오프너는 8000
+  "deadline_ts": 1756400019210,     // = user_input_submit_ts + target_delay_ms
   "reply": "AI 응답 원문",
   "llm_request_ts": 1756400004230,
   "llm_response_ts": 1756400005110,
-  "finish_reason": "stop",          // "stop" | "length"
+  "finish_reason": "stop",          // "stop" | "length" | "fixed"(오프너)
   "safety_flag": false,
   "bypass_delay": false,            // true면 deadline 무시하고 즉시 표시
-  "condition": "medium", "context": "a",
-  "prompt_sha256": "...", "model": "mock-1"
+  "condition": "R1", "depth": "deep",
+  "prompt_sha256": "...", "model": "mock-fixed"
 }
 ```
 

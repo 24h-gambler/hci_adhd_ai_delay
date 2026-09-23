@@ -7,7 +7,7 @@
 응답 검사는 손으로 하지 말고 `prompts/response_rules.py`에 붙여 넣는다.
 
 ```bash
-python3 prompts/response_rules.py --context b --text "<모델 응답 붙여넣기>"
+python3 prompts/response_rules.py --depth deep --text "<모델 응답 붙여넣기>"
 ```
 
 ---
