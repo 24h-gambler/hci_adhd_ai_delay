@@ -5,7 +5,7 @@
 #   · 턴마다 "이번 응답의 깊이" 지시만 덧붙인다 (깊음/보통/얕음).
 #   · 깊이는 (세션, 대화, 턴)으로 정해지며 사용자 입력과 무관하다.
 
-version: "v0.3"
+version: "v0.4"   # v0.3 → 깊이 지시문을 설계서 PART 3-2(EPITOME식)로 개편
 status: draft          # draft | pilot | locked
 locked_at: null
 

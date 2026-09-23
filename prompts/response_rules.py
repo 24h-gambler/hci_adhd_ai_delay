@@ -51,6 +51,18 @@ FORBIDDEN_EMOTION_ASCRIPTION = [
 ]
 
 MARKDOWN_PAT = re.compile(r"(\*\*|^\s*[-*•]\s|^\s*\d+[.)]\s|^#{1,6}\s)", re.M)
+
+# 깊이별 분량 (설계서 PART 3-2 · 깊이 지시문과 같은 값)
+DEPTH_SENTENCES = {
+    "deep": (3, 4),
+    "medium": (2, 3),
+    "shallow": (1, 2),
+}
+DEPTH_MAX_CHARS = {
+    "deep": 400,
+    "medium": 300,
+    "shallow": 200,
+}
 SENT_SPLIT = re.compile(r"[.!?…]+[\s]*")
 
 
@@ -68,7 +80,8 @@ def sentences(text: str) -> list[str]:
 
 
 def check(text: str, context: str = "a", empathy_variant: str = "B",
-          user_name: str | None = None, expect_safety: bool = False) -> list[dict]:
+          user_name: str | None = None, expect_safety: bool = False,
+          depth: str | None = None) -> list[dict]:
     """규칙 위반 목록을 돌려준다. 빈 리스트면 통과."""
     v: list[dict] = []
     t = (text or "").strip()
@@ -89,10 +102,14 @@ def check(text: str, context: str = "a", empathy_variant: str = "B",
     if SAFETY_SENTENCE in t and t != SAFETY_SENTENCE:
         bad("안전 문장에 덧붙임", "안전 문장 외의 내용이 함께 출력되었다")
 
-    # [분량]
+    # [분량] — 깊이를 알면 깊이별 기준, 모르면 구 기준(2~4문장)
     n = len(sentences(t))
-    if not (2 <= n <= 4):
-        bad("문장 수", f"{n}문장 (2~4문장이어야 함)")
+    lo, hi = DEPTH_SENTENCES.get(depth or "", (2, 4))
+    if not (lo <= n <= hi):
+        bad("문장 수", f"{n}문장 ({depth or '공통'} 기준 {lo}~{hi}문장)")
+    cap = DEPTH_MAX_CHARS.get(depth or "")
+    if cap and len(t) > cap:
+        bad("글자 수", f"{len(t)}자 ({depth} 상한 {cap}자)")
     if MARKDOWN_PAT.search(t):
         bad("서식 사용", "목록·번호·굵은 글씨가 있다")
     if has_emoji(t):
@@ -146,12 +163,13 @@ def scan_jsonl(paths, empathy_variant="B"):
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if rec.get("practice"):
+            if rec.get("practice") or rec.get("opener"):
                 continue
             v = check(rec.get("ai_response_text", ""),
                       context=str(rec.get("context", "a")),
                       empathy_variant=empathy_variant,
-                      expect_safety=bool(rec.get("safety_flag")))
+                      expect_safety=bool(rec.get("safety_flag")),
+                      depth=rec.get("depth"))
             if v:
                 rows.append({
                     "source": f"{p}:{lineno}",
@@ -173,6 +191,8 @@ def main() -> int:
     ap.add_argument("--jsonl", nargs="+", help="로그를 훑어 위반을 모은다")
     ap.add_argument("--context", default="a", choices=["a", "b"], help="대화 맥락")
     ap.add_argument("--variant", default="B", choices=["A", "B", "C"], help="맥락 B 공감 변형")
+    ap.add_argument("--depth", default=None, choices=["deep", "medium", "shallow"],
+                    help="응답의 지시 깊이 (문장 수·글자 상한을 깊이별로 적용)")
     ap.add_argument("--name", help="참가자 이름 (호명 검사용)")
     ap.add_argument("--expect-safety", action="store_true", help="안전 문장만 나와야 하는 턴")
     ap.add_argument("--json", action="store_true")
@@ -205,7 +225,7 @@ def main() -> int:
     if text is None:
         ap.print_help()
         return 2
-    v = check(text, args.context, args.variant, args.name, args.expect_safety)
+    v = check(text, args.context, args.variant, args.name, args.expect_safety, args.depth)
     if args.json:
         json.dump({"pass": not v, "violations": v}, sys.stdout, ensure_ascii=False, indent=2)
         sys.stdout.write("\n")
