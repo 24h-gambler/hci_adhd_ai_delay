@@ -171,6 +171,19 @@ python3 app/server.py --port 8000 --provider anthropic     # 실제 모델
 
 미완성 턴을 `display_ts: null`로 마감하고 로그를 닫는다.
 
+### 테스트 패널 (`?test=1`)
+
+설문 자동채우기·자동주행이 되는 임시 패널이다. **그 세션의 모든 레코드에
+`test_mode: true` 가 찍힌다** — `start_session` 이 세션에 새기고, 턴·설문·
+이벤트가 그것을 그대로 싣는다. 본문이 보내온 값이 아니라 **세션**이 기준이다
+(`Experiment.stamp_test_mode`).
+
+`analysis/manipulation_check.py` 는 `test_mode` 가 하나라도 있으면 실패한다.
+
+★ 주석으로 "실세션에서는 쓰지 않는다"고 적어 두는 것만으로는 부족하다.
+자동주행이 만든 JSONL 이 진짜 참가자 로그와 구분되지 않으면 조용히 분석에
+섞인다. P1을 구조로 보장한 것과 같은 이유다.
+
 ### `GET /api/health`
 
 배포본이 **실제로 쓸 수 있는 상태인지** 돌려준다.
