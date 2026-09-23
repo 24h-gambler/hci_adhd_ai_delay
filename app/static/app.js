@@ -118,6 +118,7 @@
     inputStartTs: null,       // 이번 턴 첫 타자 입력 시각
     awaiting: false,          // 서버 왕복 중 (입력은 계속 받는다 — 설계서 PART 3-4)
     inflightText: null,       // 표시 대기 중인 전송 원문 (중복 재전송 판정용)
+    openerPending: false,      // AI 오프너 표시 전 (이 동안 전송 불가)
     pending: null,            // 표시 대기 중인 턴
     sendQueue: [],            // 대기 중 접수된 후속 메시지 {text, queuedAtTs}
 
@@ -364,11 +365,14 @@
     D.btnEndNext.hidden = false;
     D.composer.hidden = false;
     D.chatInput.value = '';
-    setComposerEnabled(true);
+    // 오프너가 먼저 나온다 (PART 3-3). 표시 전까지 입력창을 잠근다.
+    setComposerEnabled(false);
+    State.openerPending = true;
 
     // 설계서 PART 3-4: 진행 표시 없음 — 연습·본대화 모두 카운터 숨김.
     D.chatProgress.hidden = true;
     if (D.chatCounter) { D.chatCounter.hidden = true; }
+    fetchOpener(conv.index, isPractice);
 
     showScreen(isPractice ? 'practice' : 'chat');
     if (!OPT.e2e) { try { D.chatInput.focus(); } catch (e) { /* 무시 */ } }
@@ -436,6 +440,7 @@
   /* --- 전송 ------------------------------------------------------ */
 
   function sendCurrentInput() {
+    if (State.openerPending) { return; }  // 오프너 표시 전에는 전송 불가
     if (State.screen !== 'chat' && State.screen !== 'practice') { return; }
     if (State.turnsSent + State.sendQueue.length >= State.turnsTotal) { return; }
     if (isOverlayOpen()) { return; }
@@ -511,7 +516,7 @@
       queued_during_wait: !!queued,
       // 서버가 무상태일 수 있다 (서버리스). 이 대화의 이력만 함께 보낸다.
       history: State.records
-        .filter(function (r) { return r.conversation_index === State.conversationIndex; })
+        .filter(function (r) { return r.conversation_index === State.conversationIndex && !r.opener; })
         .reduce(function (acc, r) {
           acc.push({ role: 'user', content: r.user_input_text });
           acc.push({ role: 'assistant', content: r.ai_response_text });
@@ -541,6 +546,63 @@
   }
 
   /* --- 표시 예약 (계약 §7 그대로) -------------------------------- */
+
+  // AI 오프너 (PART 3-3): 고정 문구·8초 고정·분석 제외. 참가자는 답부터 시작.
+  function fetchOpener(convIndex, isPractice) {
+    var t0 = nowMs();
+    post('/api/opener', {
+      session_id: State.session.session_id,
+      participant_id: State.participantId,
+      group: State.group,
+      conversation_index: convIndex
+    }).then(function (res) {
+      var rec = {
+        session_id: State.session ? State.session.session_id : null,
+        participant_id: State.participantId,
+        group: State.group,
+        conversation_index: convIndex,
+        condition: res.condition, depth: 'opener',
+        turn_index: 0, practice: !!isPractice, opener: true,
+        user_input_start_ts: t0, user_input_submit_ts: t0,
+        user_input_text: '', user_input_chars: 0,
+        queued_during_wait: false,
+        target_delay_ms: res.target_delay_ms,
+        llm_request_ts: t0, llm_response_ts: t0,
+        display_ts: null,
+        ai_response_text: res.reply, ai_response_chars: (res.reply || '').length,
+        next_input_start_ts: null,
+        safety_flag: false, manipulation_ok: null,
+        prompt_version: State.session ? State.session.prompt_version : null,
+        base_prompt_sha256: res.base_prompt_sha256,
+        prompt_sha256: res.base_prompt_sha256,
+        model: res.model, finish_reason: 'fixed',
+        delay_scale: State.session ? State.session.delay_scale : 1,
+        turn_id: res.turn_id
+      };
+      State.records.push(rec);
+      State.openerPending = false;
+      scheduleDisplay({
+        turn_id: res.turn_id,
+        target_delay_ms: res.target_delay_ms,
+        deadline_ts: t0 + res.target_delay_ms,
+        reply: res.reply,
+        llm_request_ts: t0, llm_response_ts: t0,
+        finish_reason: 'fixed',
+        safety_flag: false, bypass_delay: false,
+        condition: res.condition, depth: 'opener',
+        base_prompt_sha256: res.base_prompt_sha256,
+        prompt_sha256: res.base_prompt_sha256,
+        model: res.model
+      }, t0);
+    }).catch(function (err) {
+      console.error(err);
+      // 오프너 없이도 세션은 진행되게 둔다 (분석에는 영향 없음 — turn 0 부재).
+      State.openerPending = false;
+      setComposerEnabled(true);
+      toast('화면에 문제가 있습니다. 연구자를 불러주세요.');
+      publishLive();
+    });
+  }
 
   function recordTurn(res, submit, startTs, text, practice, queued) {
     var rec = {
@@ -1550,6 +1612,7 @@
             return;
           }
           if (isOverlayOpen()) { reject(new Error('안전 오버레이가 열려 있습니다')); return; }
+          if (State.openerPending) { reject(new Error('오프너 표시 전입니다')); return; }
           if (State.awaiting) { reject(new Error('이전 턴이 아직 끝나지 않았습니다')); return; }
           if (State.turnsSent >= State.turnsTotal) { reject(new Error('이 대화의 턴이 모두 끝났습니다')); return; }
           if (!String(text).trim()) { reject(new Error('빈 메시지는 보낼 수 없습니다')); return; }

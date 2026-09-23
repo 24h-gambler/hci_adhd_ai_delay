@@ -53,6 +53,8 @@ LOG_SCHEMA = [
     ("base_prompt_sha256", str),
     ("turn_index", int),
     ("practice", bool),
+    ("opener", bool),
+    ("test_mode", bool),
     ("user_input_start_ts", int),
     ("user_input_submit_ts", int),
     ("user_input_text", str),
@@ -525,6 +527,56 @@ class PracticeTurnTest(ServerCase):
     def test_practice_delay_is_the_middle_level(self):
         """연습이 가장 빠르면 이후 모든 조건이 그보다 느리게 느껴진다."""
         self.assertEqual(self.ranges["practice_ms"], self.ranges["medium_ms"])
+
+
+class OpenerTurnTest(ServerCase):
+    """PART 3-3 오프너: 고정 문구·8초 고정·LLM 미호출·분석 제외."""
+
+    def open(self, session, conv_index, expect=200):
+        return self.post("/api/opener", {
+            "session_id": session["session_id"],
+            "conversation_index": conv_index,
+        }, expect=expect)
+
+    def test_opener_is_fixed_text_with_fixed_delay(self):
+        s = self.new_session("P01")
+        conv = self.conversation_with(s, "R1")
+        calls_before = len(self.provider.calls)
+        a = self.open(s, conv["index"])
+        b = self.open(s, conv["index"])
+        self.assertEqual(a["reply"], b["reply"], "오프너는 조건·호출과 무관한 고정 문구다")
+        self.assertTrue(a["reply"], "오프너 문구가 비어 있다")
+        self.assertEqual(a["target_delay_ms"], self.ranges["practice_ms"])
+        self.assertEqual(len(self.provider.calls), calls_before, "오프너는 LLM을 호출하지 않는다")
+
+    def test_opener_is_logged_as_excluded_turn_zero(self):
+        s = self.new_session("P01")
+        conv = self.conversation_with(s, "R1")
+        o = self.open(s, conv["index"])
+        self.display(o)
+        row = self.row_for(s, conv["index"], 0)
+        self.assertTrue(row["opener"])
+        self.assertEqual(row["depth"], "opener")
+        self.assertEqual(row["condition"], "R1")
+
+    def test_opener_seeds_history_but_needs_no_user_text(self):
+        s = self.new_session("P01")
+        conv = self.conversation_with(s, "R1")
+        self.open(s, conv["index"])
+        t = self.send_turn(s, conv["index"], 1, BENIGN[0])
+        system_messages = self.provider.calls[-1]["messages"]
+        self.assertEqual(system_messages[0]["role"], "assistant")
+        self.assertEqual(system_messages[0]["content"], srv.Experiment.OPENERS[conv["index"]])
+        self.assertEqual(system_messages[1], {"role": "user", "content": BENIGN[0]})
+
+    def test_opener_unknown_conversation_is_rejected(self):
+        s = self.new_session("P01")
+        self.open(s, 99, expect=400)
+
+    def test_opener_differs_by_position_not_condition(self):
+        s = self.new_session("P01")
+        texts = {c["index"]: self.open(s, c["index"])["reply"] for c in s["conversations"]}
+        self.assertEqual(len(set(texts.values())), 3, "대화 위치별 발판이 달라야 한다")
 
 
 class LogSchemaTest(ServerCase):

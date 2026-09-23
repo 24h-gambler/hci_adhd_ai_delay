@@ -200,6 +200,7 @@ def derive(t):
 def analyzable(t):
     return (
         not t.get("practice")
+        and not t.get("opener")          # 오프너(고정 문구·8초·분석 제외)
         and not t.get("safety_flag")
         and t.get("displayed")            # 표시되지 않은 턴은 부과 지연이 없다
         and t.get("condition") in CONDITIONS
@@ -247,17 +248,18 @@ def run(turns, equiv_bound):
 
     rep.head("0 · 데이터")
     n_practice = sum(1 for t in turns if t.get("practice"))
+    n_opener = sum(1 for t in turns if t.get("opener"))
     n_safety = sum(1 for t in turns if t.get("safety_flag") and not t.get("practice"))
     n_undisplayed = sum(1 for t in turns
                         if not t.get("displayed") and not t.get("practice")
-                        and not t.get("safety_flag"))
+                        and not t.get("opener") and not t.get("safety_flag"))
     rep.say(f"  전체 턴 {len(turns)} / 분석 대상 {len(kept)} (제외 {dropped})")
-    rep.say(f"    연습 {n_practice} · 안전 경로 {n_safety} · 미표시(중단) {n_undisplayed}"
-            f" · 기타 {dropped - n_practice - n_safety - n_undisplayed}")
+    rep.say(f"    연습 {n_practice} · 오프너 {n_opener} · 안전 경로 {n_safety} · 미표시(중단) {n_undisplayed}"
+            f" · 기타 {dropped - n_practice - n_opener - n_safety - n_undisplayed}")
     if n_undisplayed:
         rep.say("    ※ 미표시 턴은 세션이 중간에 끝난 흔적이다. 논문에 이탈로 보고한다.")
-    rep.data["excluded"] = {"practice": n_practice, "safety": n_safety,
-                            "undisplayed": n_undisplayed}
+    rep.data["excluded"] = {"practice": n_practice, "opener": n_opener,
+                            "safety": n_safety, "undisplayed": n_undisplayed}
     by_cond = defaultdict(list)
     for t in kept:
         by_cond[t["condition"]].append(t)
