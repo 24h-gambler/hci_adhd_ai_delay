@@ -490,7 +490,7 @@ def main() -> int:
                          a.config, a.delay_scale, a.verbose)
     host, port = httpd.server_address
     if a.delay_scale != 1.0:
-        print(f"⚠️  delay_scale={a.delay_scale} — 축소된 지연입니다. 본 실험용이 아닙니다.")
+        print("delay_scale=%s -- scaled delays, NOT for real sessions." % a.delay_scale)
     print(f"제공자={a.provider}  지연배율={a.delay_scale}  로그={a.log_dir}")
     print(f"http://{host}:{port}/  (연구자 화면: http://{host}:{port}/?researcher=1)")
     sys.stdout.flush()

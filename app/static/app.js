@@ -1087,11 +1087,14 @@
 
     RS.sessionId = fromUrl || (live && live.session_id) || stored || null;
     if (RS.sessionId) { D.rsSessionId.value = RS.sessionId; }
-
     D.rsLoad.addEventListener('click', function () {
       RS.sessionId = (D.rsSessionId.value || '').trim() || null;
       refreshResearcher();
     });
+
+    // 짝지은 회상 (연구자 화면 전용 배선 — init 후반부는 연구자 분기에서 실행 안 됨)
+    if (D.rsRecallLoad) { D.rsRecallLoad.addEventListener('click', loadRecall); }
+    if (D.rsRecallPrint) { D.rsRecallPrint.addEventListener('click', function () { window.print(); }); }
 
     window.addEventListener('storage', function (e) {
       if (e.key === LIVE_KEY) { renderResearcher(readLive(), RS.lastPlan); }
@@ -1301,22 +1304,23 @@
   }
 
   function pickPair(turns, depth) {
+    // 같은 깊이·다른 지연 쌍. 선택 기준은 목표 지연의 양극단(서로 다른 대화),
+    // 화면 표시·면담 발화는 관측 대기만 쓴다. 조건명·목표값은 절대 안 나감.
     var cand = turns.filter(function (t) {
       return !t.practice && !t.safety_flag && t.depth === depth && t.display_ts != null;
-    }).map(function (t) {
-      return { turn: t, obs: t.display_ts - t.user_input_submit_ts };
-    }).filter(function (o) { return o.obs >= 0; });
+    });
     if (cand.length < 2) { return null; }
-    cand.sort(function (a, b) { return b.obs - a.obs; });
-    var slow = cand[0], fast = cand[cand.length - 1];
-    if (slow.turn.conversation_index === fast.turn.conversation_index) {
-      for (var i = cand.length - 2; i > 0; i--) {
-        if (cand[i].turn.conversation_index !== slow.turn.conversation_index) { fast = cand[i]; break; }
-      }
-      if (slow.turn.conversation_index === fast.turn.conversation_index) { return null; }
+    var sorted = cand.slice().sort(function (a, b) { return b.target_delay_ms - a.target_delay_ms; });
+    var slow = sorted[0], fast = null;
+    for (var i = sorted.length - 1; i > 0; i--) {
+      if (sorted[i].conversation_index !== slow.conversation_index &&
+          sorted[i].target_delay_ms < slow.target_delay_ms) { fast = sorted[i]; break; }
     }
-    if ((slow.obs - fast.obs) < 4000) { return null; }
-    return { slow: slow, fast: fast };
+    if (!fast) { return null; }
+    return {
+      slow: { turn: slow, obs: slow.display_ts - slow.user_input_submit_ts },
+      fast: { turn: fast, obs: fast.display_ts - fast.user_input_submit_ts }
+    };
   }
 
   function renderRecall(turns) {
@@ -1513,6 +1517,9 @@
     D.rsDisplay = $('rs-display');
     D.rsRaw = $('rs-raw');
     D.rsUpdated = $('rs-updated');
+    D.rsRecall = $('rs-recall');
+    D.rsRecallLoad = $('rs-recall-load');
+    D.rsRecallPrint = $('rs-recall-print');
 
     if (OPT.researcher) { initResearcher(); return; }
 
@@ -1557,9 +1564,6 @@
     D.qEffort = $('q-effort');
     D.qGod = $('q-god');
     D.btnStop = $('btn-stop');
-    D.rsRecall = $('rs-recall');
-    D.rsRecallLoad = $('rs-recall-load');
-    D.rsRecallPrint = $('rs-recall-print');
     D.surveyParts = Array.prototype.slice.call(document.querySelectorAll('.survey-part'));
     D.surveyPartLine = $('survey-part-line');
     D.btnSurveyNext = $('btn-survey-next');
@@ -1684,9 +1688,6 @@
         endSessionEarly();
       });
     }
-
-    if (D.rsRecallLoad) { D.rsRecallLoad.addEventListener('click', loadRecall); }
-    if (D.rsRecallPrint) { D.rsRecallPrint.addEventListener('click', function () { window.print(); }); }
 
     if (OPT.e2e) { installE2E(); }
   }
