@@ -104,6 +104,71 @@ class Experiment:
                 return c
         raise KeyError(f"알 수 없는 conversation_index: {conv_index}")
 
+    # ── 오프너 ──
+    # 설계서 PART 3-3: 블록마다 AI가 먼저 화제를 연다. 참가자가 "안녕하세요"로
+    # 시작하면 그 턴의 깊이 지시(특히 깊음)와 어색하게 맞물리므로, 고정 오프너를
+    # 먼저 내보내고 참가자는 답부터 시작한다.
+    #   · 문구 고정 (대화 위치별 1종, 조건·참가자와 무관 — 교락 없음)
+    #   · 지연 8초 고정 (practice_ms, 전 조건 동일 — 조작 아님)
+    #   · LLM 미호출 (생성 분산 없음) · 분석 제외 (practice와 동급)
+    OPENERS = {
+        0: "안녕하세요, 연습을 시작합니다. 아무 말이나 한 마디 보내 보세요.",
+        1: "안녕하세요. 이번에는 요즘 그래도 괜찮았던 순간에 대해 이야기해 주세요.",
+        2: "안녕하세요. 이번에는 그 일이 있고 나서 하루가 어떻게 달라졌는지 이야기해 주세요.",
+        3: "안녕하세요. 이번에는 요즘 제일 신경 쓰이는 일이 무엇인지 이야기해 주세요.",
+    }
+
+    def opener(self, body: dict) -> dict:
+        sid = body["session_id"]
+        conv = int(body["conversation_index"])
+        with self._lock:
+            sess = self._sessions.get(sid)
+        if sess is None:
+            sess = self._restore_session(sid, body)
+        meta = self._conversation_meta(sess, conv)
+        practice = conv == sched.PRACTICE_CONVERSATION_INDEX
+        text = self.OPENERS.get(conv)
+        if text is None:
+            raise KeyError(f"오프너가 없는 conversation_index: {conv}")
+        target = int(self.placement.get("practice_ms", 8000))
+        ts = now_ms()
+        m = self.cfg["model"]
+        record = {
+            "session_id": sid,
+            "participant_id": sess["participant_id"], "group": sess["group"],
+            "conversation_index": conv,
+            "condition": meta["condition"], "depth": "opener",
+            "turn_index": 0, "practice": practice, "opener": True,
+            "test_mode": bool(sess.get("test_mode")),
+            "user_input_start_ts": ts, "user_input_submit_ts": ts,
+            "user_input_text": "", "user_input_chars": 0,
+            "queued_during_wait": False,
+            "target_delay_ms": target,
+            "llm_request_ts": ts, "llm_response_ts": ts,
+            "ai_response_text": text, "ai_response_chars": len(text),
+            "next_input_start_ts": None,
+            "safety_flag": False, "manipulation_ok": True,
+            "prompt_version": self.cfg["version"],
+            "base_prompt_sha256": self._base_hash,
+            "prompt_sha256": self._base_hash,
+            "model": self.provider.model,
+            "temperature": m.get("temperature"), "max_tokens": m.get("max_tokens"),
+            "finish_reason": "fixed",
+            "delay_scale": self.delay_scale,
+        }
+        turn_id = self.store.begin_turn(record)
+        with self._lock:
+            sess["history"].setdefault(conv, []).append({"role": "assistant", "content": text})
+        return {
+            "turn_id": turn_id,
+            "target_delay_ms": target,
+            "reply": text,
+            "opener": True,
+            "condition": meta["condition"],
+            "base_prompt_sha256": self._base_hash,
+            "model": self.provider.model,
+        }
+
     # ── 턴 ──
     def turn(self, body: dict) -> dict:
         sid = body["session_id"]
@@ -432,6 +497,8 @@ class Handler(BaseHTTPRequestHandler):
                     bool(b.get("test_mode"))))
             if path == "/api/turn":
                 return self._send(200, self.experiment.turn(self._body()))
+            if path == "/api/opener":
+                return self._send(200, self.experiment.opener(self._body()))
             if path == "/api/turn/display":
                 b = self._body()
                 out = self.experiment.store.complete_display(b["turn_id"], int(b["display_ts"]))

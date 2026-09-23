@@ -299,13 +299,22 @@ python3 app/server.py --port 8000 --provider anthropic     # 실제 모델
 ## 7. 프런트엔드 화면 순서
 
 ```
-consent → briefing → practice(4턴, 8초 고정·분석 제외) → card(1회)
-→ [chat → survey] ×3 (사이 break)
+consent → briefing → practice(오프너+4턴, 8초 고정·분석 제외) → card(1회)
+→ [chat(오프너+9턴) → survey] ×3 (사이 break)
 → engagement(매핑 3택) → done
 ```
 
 본블록 9턴 = 깊음 3 · 보통 3 · 얕음 3. 연습 4턴은 실험설계 PART 2
 (워밍업 4–5턴) 하한이다.
+
+### AI 오프너 (PART 3-3)
+
+각 대화 시작 시 AI가 먼저 고정 문구로 화제를 연다. 참가자는 답부터
+시작하므로 "안녕하세요" 첫인사와 깊이 지시의 어색한 맞물림이 없다.
+- 문구: 대화 위치별 고정 1종 (연습·중간 3종, 조건·참가자와 무관)
+- 지연: 8초 고정 (전 조건 동일 — 조작이 아니라 앵커)
+- LLM 미호출 · 로그 `opener: true` · 분석 제외 (practice와 동급)
+- `POST /api/opener` → 표시 완료는 기존 `/api/turn/display` (turn_index 0)
 
 ### 타이밍 규칙 (프런트엔드) — 엄격 모드
 

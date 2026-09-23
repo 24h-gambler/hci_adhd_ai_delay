@@ -150,6 +150,10 @@ function arg(name, dflt) {
         try { await window.__exp.send(t); return 'ok'; } catch (e) { return 'e:' + e.message; }
       }, text);
       if (res.startsWith('e:')) {
+        if (/오프너 표시 전/.test(res)) {
+          await page.waitForTimeout(500);
+          continue;
+        }
         if (/턴이 모두 끝났|이전 턴이 아직/.test(res)) {
           await page.evaluate(() => window.__exp.advance());
           await page.waitForTimeout(150);
