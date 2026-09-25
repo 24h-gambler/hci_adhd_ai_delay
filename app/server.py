@@ -204,7 +204,7 @@ class Experiment:
         else:
             history = self._history_for(sess, conv)
             messages = history + [{"role": "user", "content": text}]
-            result = self.provider.complete(self._system[depth], messages)
+            result = self.provider.complete(self._system[depth], messages, depth=depth)
             with self._lock:
                 sess["history"].setdefault(conv, []).append({"role": "user", "content": text})
                 sess["history"][conv].append({"role": "assistant", "content": result["text"]})

@@ -979,6 +979,9 @@
   function showSurveyPart(n) {
     State.surveyPart = n;
     D.surveyParts.forEach(function (el, i) { el.hidden = (i + 1) !== n; });
+    // 프로그램 방식 채우기(e2e·테스트)는 input 이벤트가 안 나므로 여기서도 해제
+    Array.prototype.forEach.call(document.querySelectorAll('fieldset.q.missing'),
+      function (fs) { fs.classList.remove('missing'); });
     if (D.surveyPartLine) { D.surveyPartLine.textContent = n + ' / ' + D.surveyParts.length; }
     if (D.btnSurveyNext) {
       D.btnSurveyNext.textContent = (n < D.surveyParts.length) ? '다음' : '제출';
@@ -1872,6 +1875,16 @@
     });
     D.safetyContinue.addEventListener('click', closeSafetyOverlay);
     D.safetyEnd.addEventListener('click', endSessionEarly);
+
+    // 집단 선택은 참가자에게 노출하지 않는다 (낙인·요구특성 방지).
+    // 연구자가 주소 뒤에 ?group=comparison 을 붙이면 비교집단으로 시작한다.
+    (function initGroup() {
+      if (!D.group) { return; }
+      var g = params.get('group');
+      if (g === 'comparison' || g === 'adhd') { D.group.value = g; }
+      var fs = D.group.closest ? D.group.closest('fieldset') : null;
+      if (fs) { fs.hidden = true; }
+    })();
 
     buildSurveyForm();
     showScreen('consent');

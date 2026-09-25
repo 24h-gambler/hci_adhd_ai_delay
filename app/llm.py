@@ -92,14 +92,19 @@ class MockProvider:
             base = 280 + 3 * len(text) + jitter    # 'length' — 입력 길이 비례
         return max(1, round(base * self.latency_scale))
 
-    def complete(self, system: str, messages: list[dict]) -> dict:
+    def complete(self, system: str, messages: list[dict], depth: str | None = None) -> dict:
         request_ts = now_ms()
         self.calls.append({"system": system, "messages": [dict(m) for m in messages]})
         latency = self._latency_ms(system, messages)
         time.sleep(latency / 1000.0)
-        depth = ("deep" if "깊음" in system else
-                 "shallow" if "얕음" in system else "medium")
-        pool = _MOCK[depth]
+        # ★ 깊이는 문자열 매칭으로 추측하지 않는다. 서버가 turn_plan에서 정한
+        #   값을 그대로 받는다 (공통 프롬프트에 "깊음" 단어가 있어 오판한 사고).
+        if depth in _MOCK:
+            key = depth
+        else:
+            key = ("deep" if "깊음" in system else
+                   "shallow" if "얕음" in system else "medium")
+        pool = _MOCK[key]
         turn = sum(1 for m in messages if m["role"] == "user")
         text = pool[(turn - 1) % len(pool)]
         return {
@@ -142,7 +147,7 @@ class AnthropicProvider:
             # 현재 세대 모델은 temperature를 400으로 거부한다. 조용히 빼고 기록한다.
             self.omitted_params.append("temperature")
 
-    def complete(self, system: str, messages: list[dict]) -> dict:
+    def complete(self, system: str, messages: list[dict], depth: str | None = None) -> dict:
         kwargs = {
             "model": self.model,
             "max_tokens": self.max_tokens,
