@@ -573,6 +573,31 @@ class OpenerTurnTest(ServerCase):
         s = self.new_session("P01")
         self.open(s, 99, expect=400)
 
+    def test_opener_manipulation_ok_is_always_false(self):
+        """opener는 분석 제외 — 서버·스토어·(표시 후) 로그 모두 False."""
+        s = self.new_session("P01")
+        for conv in [c["index"] for c in s["conversations"]] + [0]:
+            o = self.open(s, conv)
+            self.display(o)
+            row = self.row_for(s, conv, 0)
+            self.assertFalse(row["manipulation_ok"],
+                             "대화 %s 오프너가 분석 대상으로 남는다" % conv)
+
+    def test_session_start_rejects_unknown_group(self):
+        self.post("/api/session/start",
+                  {"participant_id": "P99", "group": "x"},
+                  expect=400)
+        self.post("/api/session/start",
+                  {"participant_id": "P99"},
+                  expect=400)
+
+    def test_mock_calls_record_explicit_depth(self):
+        s = self.new_session("P01")
+        conv = self.conversation_with(s, "R1")
+        self.turn_and_display(s, conv["index"], 1, BENIGN[0])
+        call = self.provider.calls[-1]
+        self.assertEqual(call["depth"], self.log_rows(s)[-1]["depth"])
+
     def test_opener_differs_by_position_not_condition(self):
         s = self.new_session("P01")
         texts = {c["index"]: self.open(s, c["index"])["reply"] for c in s["conversations"]}

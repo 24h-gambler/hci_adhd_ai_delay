@@ -111,8 +111,8 @@
     context: null,
     block: null,
 
-    turnsSent: 0,             // 전송 직후 증가 (계약 §7)
-    turnsTotal: 5,
+    turnsSent: 0,             // 전송 직후 증가 (내부 상태용, 화면 미표시)
+    turnsTotal: 9,
 
     prevTurnId: null,         // 다음 턴 첫 타자 입력 시각을 채워 넣을 직전 턴
     inputStartTs: null,       // 이번 턴 첫 타자 입력 시각
@@ -808,6 +808,7 @@
     if (clientRec) {
       clientRec.display_ts = displayTs;
       clientRec.manipulation_ok = !clientRec.safety_flag && !clientRec.practice
+        && !clientRec.opener
         && clientRec.llm_response_ts <= clientRec.user_input_submit_ts + clientRec.target_delay_ms;
     }
 
@@ -1606,16 +1607,16 @@
     var d = dp.deep_ms || 0, m = dp.medium_ms || 0, sh = dp.shallow_ms || 0;
     var total = 3 * (d + m + sh);
     var lines = [];
-    lines.push('DELAY: R1 deep' + testSec(d) + '/mid' + testSec(m) + '/sh' + testSec(sh)
-      + ' | R2 deep' + testSec(sh) + '/mid' + testSec(m) + '/sh' + testSec(d)
-      + ' | R3 shuffled | sum ' + testSec(total) + '/conv'
-      + (scale !== 1 ? ' (x' + scale + ' scaled)' : ' (FULL)'));
-    lines.push('ORDER: ' + (State.session.condition_order || []).join('>'));
+    lines.push('지연: R1 깊음' + testSec(d) + '/보통' + testSec(m) + '/얕음' + testSec(sh)
+      + ' | R2 깊음' + testSec(sh) + '/보통' + testSec(m) + '/얕음' + testSec(d)
+      + ' | R3 섞음 | 합 ' + testSec(total) + '/대화'
+      + (scale !== 1 ? ' (x' + scale + ' 축소)' : ' (실측)'));
+    lines.push('순서: ' + (State.session.condition_order || []).join('>'));
     var pos = State.screen
-      + (State.conversationIndex != null ? ' conv' + State.conversationIndex : '')
+      + (State.conversationIndex != null ? ' 대화' + State.conversationIndex : '')
       + (State.condition ? '(' + State.condition + ')' : '')
-      + ' turn ' + State.turnsSent + '/' + State.turnsTotal;
-    lines.push('POS: ' + pos);
+      + ' 턴 ' + State.turnsSent + '/' + State.turnsTotal;
+    lines.push('위치: ' + pos);
     if (State.lastDisplay) {
       var rec = null;
       for (var i = State.records.length - 1; i >= 0; i--) {
@@ -1624,9 +1625,9 @@
       if (rec) {
         var obs = rec.display_ts - rec.user_input_submit_ts;
         var err = rec.display_ts - (rec.user_input_submit_ts + rec.target_delay_ms);
-        lines.push('LAST: ' + rec.depth + ' target' + testSec(rec.target_delay_ms)
-          + ' obs' + testSec(obs) + ' err' + (err >= 0 ? '+' : '') + err + 'ms'
-          + (rec.queued_during_wait ? ' QUEUED' : ''));
+        lines.push('직전: ' + rec.depth + ' 목표' + testSec(rec.target_delay_ms)
+          + ' 관측' + testSec(obs) + ' 오차' + (err >= 0 ? '+' : '') + err + 'ms'
+          + (rec.queued_during_wait ? ' 큐경유' : ''));
       }
     }
     box.textContent = lines.join('\n');
@@ -1876,14 +1877,14 @@
     D.safetyContinue.addEventListener('click', closeSafetyOverlay);
     D.safetyEnd.addEventListener('click', endSessionEarly);
 
-    // 집단 선택은 참가자에게 노출하지 않는다 (낙인·요구특성 방지).
+    // 집단 선택 행만 숨긴다 (참가자 ID 입력란은 그대로 둔다).
     // 연구자가 주소 뒤에 ?group=comparison 을 붙이면 비교집단으로 시작한다.
     (function initGroup() {
       if (!D.group) { return; }
       var g = params.get('group');
       if (g === 'comparison' || g === 'adhd') { D.group.value = g; }
-      var fs = D.group.closest ? D.group.closest('fieldset') : null;
-      if (fs) { fs.hidden = true; }
+      var row = $('group-row');
+      if (row) { row.hidden = true; }
     })();
 
     buildSurveyForm();

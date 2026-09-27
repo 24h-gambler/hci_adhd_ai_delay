@@ -147,7 +147,7 @@ class Experiment:
             "llm_request_ts": ts, "llm_response_ts": ts,
             "ai_response_text": text, "ai_response_chars": len(text),
             "next_input_start_ts": None,
-            "safety_flag": False, "manipulation_ok": True,
+            "safety_flag": False, "manipulation_ok": False,
             "prompt_version": self.cfg["version"],
             "base_prompt_sha256": self._base_hash,
             "prompt_sha256": self._base_hash,
@@ -285,7 +285,7 @@ class Experiment:
             return list(sess["history"].get(conv, []))
 
     def stamp_test_mode(self, record: dict) -> dict:
-        """설문·이벤트 레코드에 세션의 test_mode 를 찍는다.
+        """설문·이벤트 레코드에 세션의 test_mode·group 을 찍는다.
 
         본문이 보내온 값을 그대로 믿지 않는다. 메모리에 세션이 있으면 그것이
         기준이고, 없으면(서버리스 콜드 스타트) 본문 값을 쓴다.
@@ -293,6 +293,8 @@ class Experiment:
         with self._lock:
             sess = self._sessions.get(record.get("session_id"))
         record["test_mode"] = bool(sess["test_mode"]) if sess else bool(record.get("test_mode"))
+        if sess:
+            record["group"] = sess["group"]
         return record
 
     def plan(self, sid: str) -> dict:
@@ -492,8 +494,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/session/start":
                 b = self._body()
+                group = b.get("group", "")
+                if group not in ("adhd", "comparison"):
+                    return self._send(400, {"error": "unknown group: %r (adhd|comparison)" % (group,)})
                 return self._send(200, self.experiment.start_session(
-                    b.get("participant_id", "P00"), b.get("group", "unspecified"),
+                    b.get("participant_id", "P00"), group,
                     bool(b.get("test_mode"))))
             if path == "/api/turn":
                 return self._send(200, self.experiment.turn(self._body()))

@@ -94,7 +94,8 @@ class MockProvider:
 
     def complete(self, system: str, messages: list[dict], depth: str | None = None) -> dict:
         request_ts = now_ms()
-        self.calls.append({"system": system, "messages": [dict(m) for m in messages]})
+        self.calls.append({"system": system, "messages": [dict(m) for m in messages],
+                           "depth": depth})
         latency = self._latency_ms(system, messages)
         time.sleep(latency / 1000.0)
         # ★ 깊이는 문자열 매칭으로 추측하지 않는다. 서버가 turn_plan에서 정한
@@ -148,6 +149,9 @@ class AnthropicProvider:
             self.omitted_params.append("temperature")
 
     def complete(self, system: str, messages: list[dict], depth: str | None = None) -> dict:
+        # depth는 mock 경로에서 풀 선택에 쓴다. 실모델은 system 프롬프트의
+        # 깊이 지시로만 분화되므로 여기서는 무시한다 — 깊이별 길이 단조성은
+        # manipulation_check §3이 사후에 검증한다.
         kwargs = {
             "model": self.model,
             "max_tokens": self.max_tokens,
