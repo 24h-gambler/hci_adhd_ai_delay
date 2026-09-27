@@ -77,6 +77,19 @@ class TestDepthSequence(unittest.TestCase):
         a = [S.depth_sequence(self.SID, 1) for _ in range(50)]
         self.assertEqual(len({tuple(x) for x in a}), 1)
 
+    def test_no_three_in_a_row(self):
+        """★ 같은 깊이 연속 3회 금지 (설계 PART 3-1). 2000세션 sweep."""
+        import itertools
+        bad = 0
+        for n in range(1, 2001):
+            sid = S.make_session_id("P%02d" % (n % 60 + 1), 1700000000000 + n)
+            for conv in (1, 2, 3):
+                seq = S.depth_sequence(sid, conv)
+                mx = max(len(list(g)) for _, g in itertools.groupby(seq))
+                if mx > 2:
+                    bad += 1
+        self.assertEqual(bad, 0, "3연속 깊이가 %d건 나왔다" % bad)
+
     def test_differs_by_conversation_and_session(self):
         seqs = {tuple(S.depth_sequence(self.SID, c)) for c in (1, 2, 3)}
         self.assertGreater(len(seqs), 1, "대화마다 깊이 순서가 같으면 안 된다")

@@ -101,6 +101,7 @@ class TurnStore:
             rec["manipulation_ok"] = bool(
                 not rec["safety_flag"]
                 and not rec["practice"]
+                and not rec.get("opener")
                 and rec["llm_response_ts"] <= deadline
             )
             self._flush(rec["session_id"])
@@ -138,7 +139,12 @@ class TurnStore:
 
         B9: 대화별 합산을 함께 돌려준다. observed는 display_ts가 있는
         턴만 display-submit 합에 넣는다 (미표시 제외).
+        ★ 합산은 analyzable(조작 점검 정의)과 같은 제외를 쓴다:
+          practice·opener·test_mode·안전 턴은 빼고 집계한다.
         """
+        def _analyzable(r: dict) -> bool:
+            return (not r.get("practice") and not r.get("opener")
+                    and not r.get("test_mode") and not r.get("safety_flag"))
         with self._lock:
             recs = self._turns.get(session_id, [])
             incomplete = sum(1 for r in recs if r.get("display_ts") is None)
@@ -148,16 +154,17 @@ class TurnStore:
             for r in recs:
                 by_conv.setdefault(r.get("conversation_index"), []).append(r)
             for ci, rows in by_conv.items():
-                target_total = sum(int(r.get("target_delay_ms") or 0) for r in rows)
+                kept = [r for r in rows if _analyzable(r)]
+                target_total = sum(int(r.get("target_delay_ms") or 0) for r in kept)
                 observed_total = sum(
                     int(r["display_ts"] - r["user_input_submit_ts"])
-                    for r in rows if r.get("display_ts") is not None
+                    for r in kept if r.get("display_ts") is not None
                 )
                 conversations[ci] = {
                     "target_total_ms": target_total,
                     "observed_total_ms": observed_total,
-                    "n_turns": len(rows),
-                    "n_shown": sum(1 for r in rows if r.get("display_ts") is not None),
+                    "n_turns": len(kept),
+                    "n_shown": sum(1 for r in kept if r.get("display_ts") is not None),
                 }
                 session_target_total_ms += target_total
             self._flush(session_id)
