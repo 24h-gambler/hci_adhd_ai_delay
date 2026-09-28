@@ -152,8 +152,8 @@
     '대화는 아홉 번 주고받으면 끝납니다.\n모두 세 번 합니다.'
   ];
 
-  var TOPIC_LABEL = '대화 주제: ';
-  var TOPIC_PHRASE = '요즘 신경 쓰이거나 마음에 걸리는 일';
+  var TOPIC_LABEL = '이야기 주제: ';
+  var TOPIC_PHRASE = '요즘 신경 쓰이는 일';
 
   var PRACTICE_NOTE = '연습입니다. 네 번 주고받아 보세요. 아무 말이나 입력하고 보내면 됩니다.';
 
@@ -450,7 +450,10 @@
   function sendCurrentInput() {
     if (State.openerPending) { return; }  // 오프너 표시 전에는 전송 불가
     if (State.screen !== 'chat' && State.screen !== 'practice') { return; }
-    if (State.turnsSent + State.sendQueue.length >= State.turnsTotal) { return; }
+    if (State.turnsSent + State.sendQueue.length >= State.turnsTotal) {
+      toast('지금은 보낼 수 없습니다.');
+      return;
+    }
     if (isOverlayOpen()) { return; }
 
     var text = D.chatInput.value;
@@ -479,9 +482,18 @@
         publishLive();
         return;
       }
+      // 대기 중 전송은 보관만 한다. 자동 전송하지 않는다 (연속 답장 체인 방지).
+      // 접수 자체가 B1(재전송 관측)로 기록된다. 현재 턴 표시 후 입력창으로
+      // 되돌려 참가자가 직접 보내게 한다.
       var qStart = State.inputStartTs != null ? State.inputStartTs : nowMs();
       var bubble = appendMessage('user', text);
+      bubble.classList.add('is-queued');
       scrollLogToEnd();
+      var qev = { kind: 'B1_queued', ts: nowMs(), screen: State.screen,
+        conversation_index: State.conversationIndex,
+        user_input_chars: text.length, user_input_text: text };
+      State.attentionEvents.push(qev);
+      postEvent('B1_queued', qev);
       State.sendQueue.push({
         text: text, startTs: qStart, queuedAtTs: nowMs(), bubble: bubble, queued: true
       });
@@ -538,9 +550,10 @@
       // 턴이 성립하지 않았으므로 카운터를 되돌리고 재전송할 수 있게 둔다.
       // 화면에 붙인 사용자 말풍선도 함께 거둔다 — 남겨 두면 재전송 때 같은
       // 문장이 두 번 보이고, 화면 대화 기록이 로그의 턴 순서와 어긋난다.
-      // (큐로 들어온 말풍선은 거두지 않고 큐에 그대로 둔다.)
+      // (큐 말풍선도 거둔다. 실패한 턴은 서버에 없거나 같은 ID로 덮어써지므로
+      //  말풍선을 남기면 답 없는 유령 버블이 된다.)
       hideIndicator();
-      if (!queued && userBubble && userBubble.parentNode) { userBubble.parentNode.removeChild(userBubble); }
+      if (userBubble && userBubble.parentNode) { userBubble.parentNode.removeChild(userBubble); }
       State.awaiting = false;
       State.inflightText = null;
       State.turnsSent = turnIndex - 1;
@@ -853,12 +866,22 @@
 
     if (p.safety) { openSafetyOverlay(p); return; }
 
-    // 대기 중 큐(B1) 드레인: 현재 턴 표시 직후 다음 큐 메시지를 새 턴으로 전송.
-    // 말풍선은 큐 접수 시점에 이미 붙였으므로 재사용한다.
+    // 대기 중 큐: 자동 전송하지 않는다. 첫 항목을 입력창으로 되돌린다.
+    // 참가자가 직접 보내야 다음 턴이 나간다 — 연속 답장 체인 방지.
     if (State.sendQueue.length && State.turnsSent < State.turnsTotal &&
         (State.screen === 'chat' || State.screen === 'practice')) {
-      var q = State.sendQueue.shift();
-      doSubmit(q.text, q.startTs, q.bubble, true);
+      var q0 = State.sendQueue.shift();
+      if (q0.bubble && q0.bubble.parentNode) { q0.bubble.parentNode.removeChild(q0.bubble); }
+      D.chatInput.value = q0.text;
+      State.inputStartTs = q0.startTs;
+      if (!OPT.e2e) { try { D.chatInput.focus(); } catch (e) { /* 무시 */ } }
+    }
+    // 대화가 끝났는데 큐가 남았으면 영수증만 거둔다 (턴으로 만들지 않음).
+    if (State.turnsSent >= State.turnsTotal) {
+      State.sendQueue.forEach(function (qz) {
+        if (qz.bubble && qz.bubble.parentNode) { qz.bubble.parentNode.removeChild(qz.bubble); }
+      });
+      State.sendQueue = [];
     }
   }
 
