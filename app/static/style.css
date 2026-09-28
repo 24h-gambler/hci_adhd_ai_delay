@@ -316,6 +316,16 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 #test-panel strong { display: block; margin-bottom: 6px; }
 #test-log { margin-bottom: 8px; word-break: break-word; }
 #test-panel .btn { margin: 2px 4px 2px 0; }
+
+/* 대기 중 접수 영수증 (시간 정보 없음 — 정적 표시) */
+.msg.is-queued .bubble {
+  opacity: 0.55;
+  border: 1px dashed var(--line-2);
+}
+
+/* 동의 화면 하단 연구자 링크 */
+.foot-links { margin-top: 28px; font-size: 14px; color: var(--ink-3); }
+.foot-links a { color: var(--ink-3); }
 #test-dash {
   margin: 8px 0; padding: 8px; border: 1px solid #ffd75e; border-radius: 6px;
   font-size: 13px; line-height: 1.6; white-space: pre-wrap;

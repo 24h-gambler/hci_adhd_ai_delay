@@ -334,8 +334,10 @@ function show(){ appendMessage(reply); POST /api/turn/display {display_ts: nowMs
   엄격 모드에서 무시된다 (기본 `none`/off 고정).
 - 진행 표시 `(n/9)`·`이번 대화는 N번` 문구를 화면에 내지 않는다.
 - 입력창은 대기 중에도 열려 있다. 대기 중 전송은 큐(`sendQueue`)에
-  넣고 현재 턴 표시 직후 새 턴으로 전송한다. 큐 접수 턴은
-  `queued_during_wait: true`로 로그에 남는다 (B1).
+  보관만 하고 **자동 전송하지 않는다** (연속 답장 체인 방지).
+  현재 턴 표시 후 첫 항목을 입력창으로 되돌려 참가자가 직접 보내게 한다.
+  같은 내용 재전송은 턴으로 만들지 않고 `B1_duplicate_ignored`로만 기록한다.
+  큐 접수 자체는 `B1_queued` 이벤트로 기록된다 (재전송 관측).
 - 대기 중 첫 타자도 `user_input_start_ts`에 그대로 기록된다 (B2).
 - `visibilitychange`/`blur` 이탈은 `attentionEvents` 메모리 로그 +
   연구자 화면·`*.attention.jsonl`에 남긴다 (B4, 서버 영속화는 Phase 2).
