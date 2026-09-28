@@ -1502,31 +1502,31 @@
       return;
     }
     var DEPTH_KO = { deep: '깊은 답', medium: '보통 답', shallow: '얕은 답' };
-    [['deep', '깊은 답 쌍 (같은 깊이 · 다른 대기)'],
-     ['shallow', '얕은 답 쌍 (같은 깊이 · 다른 대기)']].forEach(function (spec) {
+    [['deep', '깊은 답 2개 (기다린 시간 다름)'],
+     ['shallow', '얕은 답 2개 (기다린 시간 다름)']].forEach(function (spec) {
       var pair = pickPair(turns, spec[0]);
       var box = el('div', 'rs-recall-pair');
       box.appendChild(el('h3', null, spec[1]));
       if (!pair) {
-        box.appendChild(el('div', 'rs-none', '해당 쌍을 찾지 못했습니다 (표시 완료 턴 부족).'));
+        box.appendChild(el('div', 'rs-none', '해당 쌍이 없습니다 (표시된 답이 부족합니다).'));
       } else {
         [pair.slow, pair.fast].forEach(function (o, idx) {
           var card = el('div', 'rs-recall-card');
           card.appendChild(el('p', 'rs-recall-meta',
             (idx === 0 ? 'A' : 'B') + ' · ' + (DEPTH_KO[spec[0]] || spec[0]) +
-            ' · 대기 약 ' + observedSec(o.turn) + '초'));
+            ' · 기다린 시간 약 ' + observedSec(o.turn) + '초'));
           card.appendChild(el('p', null, '참가자: ' + truncText(o.turn.user_input_text, 200)));
           card.appendChild(el('p', null, 'AI: ' + truncText(o.turn.ai_response_text, 300)));
           box.appendChild(card);
         });
-        var ask = el('p', 'rs-note', '면담 질문 예: "A와 B가 각각 어떠셨어요?" (조건명은 말하지 않습니다)');
+        var ask = el('p', 'rs-note', '이렇게 물어보세요: "A와 B가 각각 어떠셨어요?"');
         box.appendChild(ask);
       }
       D.rsRecall.appendChild(box);
     });
 
     var all = el('div', 'rs-recall-all');
-    all.appendChild(el('h3', null, '전체 턴 (대기 시간만 표기)'));
+    all.appendChild(el('h3', null, '전체 대화 (기다린 시간만 표시)'));
     var byConv = {};
     turns.forEach(function (t) {
       if (t.practice || t.conversation_index == null) { return; }
@@ -1538,8 +1538,8 @@
         .forEach(function (t) {
           var line = el('div', 'rs-recall-turn');
           line.appendChild(el('p', 'rs-recall-meta',
-            '턴 ' + t.turn_index + ' · ' + (DEPTH_KO[t.depth] || t.depth) +
-            ' · 대기 ' + (observedSec(t) == null ? '—' : '약 ' + observedSec(t) + '초')));
+            t.turn_index + '번째 · ' + (DEPTH_KO[t.depth] || t.depth) +
+            ' · 기다린 시간 ' + (observedSec(t) == null ? '—' : '약 ' + observedSec(t) + '초')));
           line.appendChild(el('p', null, '참가자: ' + truncText(t.user_input_text, 160)));
           line.appendChild(el('p', null, 'AI: ' + truncText(t.ai_response_text, 240)));
           all.appendChild(line);
@@ -1591,15 +1591,29 @@
       return b;
     }
     btn('설문채우기', function () {
-      if (!window.__exp) { return testLog('세션 없음'); }
+      if (!window.__exp) { testLog('세션 없음'); return; }
+      var st = window.__exp.state();
+      // 설문 화면이 아니면 다음으로 이동 (첫 화면에서는 세션 시작)
+      if (st.screen !== 'survey' && st.screen !== 'engagement') { testNext(); return; }
       window.__exp.fillSurvey().then(
         function () { testLog('설문 제출됨'); },
         function (e) { testLog('설문 실패: ' + (e && e.message ? e.message : e)); });
     });
-    btn('다음', function () {
-      if (!window.__exp) { return testLog('세션 없음'); }
+    btn('다음', function () { testNext(); });
+    function testNext() {
+      if (!window.__exp) { testLog('세션 없음'); return; }
+      // 첫 화면(동의)에서는 체크+ID까지 채워서 시작한다
+      if (State.screen === 'consent') {
+        D.consentCheck.checked = true;
+        var pid = (D.pid.value || '').trim().toUpperCase();
+        if (!/^P\d{1,3}$/.test(pid)) { D.pid.value = 'P99'; }
+        D.consentError.hidden = true;
+        D.btnStart.click();
+        testLog('세션 시작 중...');
+        return;
+      }
       testLog(window.__exp.advance() ? '다음으로 이동' : '누를 버튼 없음');
-    });
+    }
     btn('메시지 보내기', function () {
       if (!window.__exp) { return testLog('세션 없음'); }
       var st = window.__exp.state();
